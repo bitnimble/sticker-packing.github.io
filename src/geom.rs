@@ -274,6 +274,9 @@ fn fillet_ring(pts: &[Coord<f64>], r: f64, only_convex: bool) -> Vec<[f64; 2]> {
     if n < 3 || r <= 0.0 {
         return pts.iter().map(|c| [c.x, c.y]).collect();
     }
+    // A corner is external (convex) when its turn matches the ring's winding; the winding can be
+    // either way out of the boolean stage / in a y-down space, so key off the signed area.
+    let orient = if ring_signed_area(pts) >= 0.0 { 1.0 } else { -1.0 };
     let mut out: Vec<[f64; 2]> = Vec::with_capacity(n * 4);
     for i in 0..n {
         let p = pts[(i + n - 1) % n];
@@ -282,7 +285,7 @@ fn fillet_ring(pts: &[Coord<f64>], r: f64, only_convex: bool) -> Vec<[f64; 2]> {
         let din = unit(v.x - p.x, v.y - p.y);
         let dout = unit(q.x - v.x, q.y - v.y);
         let delta = (din.0 * dout.1 - din.1 * dout.0).atan2(din.0 * dout.0 + din.1 * dout.1);
-        if delta.abs() < 1e-6 || (only_convex && delta <= 0.0) {
+        if delta.abs() < 1e-6 || (only_convex && delta * orient <= 0.0) {
             out.push([v.x, v.y]);
             continue;
         }
@@ -313,15 +316,11 @@ fn fillet_ring(pts: &[Coord<f64>], r: f64, only_convex: bool) -> Vec<[f64; 2]> {
     out
 }
 
-/// Outward offset of a simple polygon by `m` with the given corner style. The offset is mitered
-/// first (so its distance is exactly `m`), then rounded corners are filleted with `round_radius`
-/// -- decoupling how round the corners are from how far the outline sits from the art.
-/// Self-intersections are resolved with a NonZero fill.
-pub fn offset_outline(sil: &Poly, m: f64, round_radius: f64, style: JoinStyle) -> Multi {
-    let ext = sil.exterior();
-    let mut pts: Vec<Coord<f64>> = ext.0[..ext.0.len().saturating_sub(1)].to_vec();
-    if pts.len() < 3 || m <= 0.0 {
-        return MultiPolygon::new(vec![sil.clone()]);
+/// The miter (sharp) offset boundary of a single ring by `m`, as a possibly self-intersecting
+/// point list to be cleaned by a NonZero fill.
+fn sharp_offset_contour(mut pts: Vec<Coord<f64>>, m: f64) -> Vec<[f64; 2]> {
+    if pts.len() < 3 {
+        return vec![];
     }
     if ring_signed_area(&pts) < 0.0 {
         pts.reverse();
@@ -364,23 +363,44 @@ pub fn offset_outline(sil: &Poly, m: f64, round_radius: f64, style: JoinStyle) -
             }
         }
     }
+    out
+}
 
-    let sharp = shapes_to_polys(out.simplify_shape(FillRule::NonZero, 0.0));
+/// Outward offset of one or more silhouette rings by `m`, mitered first (so the distance is
+/// exactly `m`) then optionally filleted with `round_radius` -- decoupling corner roundness from
+/// the offset distance. All rings are unioned, so nearby components (e.g. particle islands) merge
+/// into one outline where their offsets touch. Self-intersections are resolved with a NonZero fill.
+pub fn offset_outline_multi(rings: &[Vec<[f64; 2]>], m: f64, round_radius: f64, style: JoinStyle) -> Multi {
+    let to_coords = |r: &Vec<[f64; 2]>| r.iter().map(|p| coord! {x: p[0], y: p[1]}).collect::<Vec<Coord<f64>>>();
+    if m <= 0.0 {
+        let polys: Vec<Poly> = rings.iter().filter(|r| r.len() >= 3)
+            .map(|r| Polygon::new(LineString::new(to_coords(r)), vec![]))
+            .collect();
+        return MultiPolygon::new(polys);
+    }
+    let contours: Vec<Vec<[f64; 2]>> = rings.iter()
+        .map(|r| sharp_offset_contour(to_coords(r), m))
+        .filter(|c| c.len() >= 3)
+        .collect();
+    if contours.is_empty() {
+        return MultiPolygon::new(vec![]);
+    }
+    let sharp = shapes_to_polys(contours.simplify_shape(FillRule::NonZero, 0.0));
     if sharp.is_empty() {
-        return MultiPolygon::new(vec![sil.clone()]);
+        return MultiPolygon::new(vec![]);
     }
     if style == JoinStyle::SharpAll || round_radius <= 0.0 {
         return MultiPolygon::new(sharp);
     }
     let only_convex = style == JoinStyle::RoundExternal;
-    let rings: Vec<Vec<[f64; 2]>> = sharp
+    let filleted_rings: Vec<Vec<[f64; 2]>> = sharp
         .iter()
         .map(|p| {
             let e = p.exterior();
             fillet_ring(&e.0[..e.0.len().saturating_sub(1)], round_radius, only_convex)
         })
         .collect();
-    let filleted = shapes_to_polys(rings.simplify_shape(FillRule::NonZero, 0.0));
+    let filleted = shapes_to_polys(filleted_rings.simplify_shape(FillRule::NonZero, 0.0));
     if filleted.is_empty() {
         MultiPolygon::new(sharp)
     } else {

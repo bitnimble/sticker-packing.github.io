@@ -130,16 +130,34 @@ pub fn parse_join_style(s: &str) -> Result<JoinStyle, String> {
 /// Build an outline SVG by offsetting a traced art silhouette (viewBox-unit `points`, flattened
 /// x,y pairs) outward by `margin` with the given corner style. The result shares the art's
 /// viewBox, so it drops straight into the pipeline as the border.
-pub fn auto_outline_svg(points: &[f64], vb: &[f64; 4], margin: f64, round_radius: f64, style: JoinStyle, stroke: f64) -> Result<String, String> {
-    if points.len() < 6 {
-        return Err("need at least 3 silhouette points".into());
+pub fn auto_outline_svg(points: &[f64], lengths: &[u32], vb: &[f64; 4], margin: f64, round_radius: f64, style: JoinStyle, stroke: f64) -> Result<String, String> {
+    let mut rings: Vec<Vec<[f64; 2]>> = Vec::new();
+    let mut idx = 0usize;
+    for &len in lengths {
+        let l = len as usize;
+        if idx + 2 * l > points.len() {
+            break;
+        }
+        if l >= 3 {
+            rings.push((0..l).map(|k| [points[idx + 2 * k], points[idx + 2 * k + 1]]).collect());
+        }
+        idx += 2 * l;
     }
-    let ring: Vec<(f64, f64)> = points.chunks_exact(2).map(|c| (c[0], c[1])).collect();
-    let outline = largest(&offset_outline(&poly_from(&ring), margin, round_radius, style));
+    if rings.is_empty() {
+        return Err("need at least one silhouette contour".into());
+    }
+    let outline = offset_outline_multi(&rings, margin, round_radius, style);
+    if outline.0.is_empty() {
+        return Err("could not build an outline from the art".into());
+    }
+    let paths: String = outline
+        .0
+        .iter()
+        .map(|p| format!("<path d=\"{}\" fill=\"none\" stroke=\"#000000\" stroke-width=\"{}\"/>", output::poly_d(p), stroke))
+        .collect();
     Ok(format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"{} {} {} {}\">\
-         <path d=\"{}\" fill=\"none\" stroke=\"#000000\" stroke-width=\"{}\"/></svg>",
-        vb[2], vb[3], vb[0], vb[1], vb[2], vb[3], output::poly_d(&outline), stroke
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"{} {} {} {}\">{}</svg>",
+        vb[2], vb[3], vb[0], vb[1], vb[2], vb[3], paths
     ))
 }
 

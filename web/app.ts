@@ -163,9 +163,12 @@ function genOutline(style: string): string {
   const key = style + ':' + marginMm + ':' + stickerW;
   const hit = previewCache.get(key);
   if (hit) return hit;
+  const flat: number[] = [];
+  const lengths: number[] = [];
+  for (const c of traced.contours) { lengths.push(c.length / 2); for (const v of c) flat.push(v); }
   const stroke = Math.max(traced.vb[2], traced.vb[3]) / 150;
   const roundRadius = margin * 4; // corners noticeably rounder than the bleed distance
-  const svg = auto_outline(new Float64Array(traced.points), traced.vb[0], traced.vb[1], traced.vb[2], traced.vb[3], margin, roundRadius, style, stroke);
+  const svg = auto_outline(new Float64Array(flat), new Uint32Array(lengths), traced.vb[0], traced.vb[1], traced.vb[2], traced.vb[3], margin, roundRadius, style, stroke);
   previewCache.set(key, svg);
   return svg;
 }
@@ -225,8 +228,8 @@ $('styleOpts').querySelectorAll('label').forEach((lab) => {
       const art = `<image href="${image.url}" x="${vb[0]}" y="${vb[1]}" width="${vb[2]}" height="${vb[3]}" preserveAspectRatio="none"/>`;
       const outline = genOutline(val)
         .replace('<path', art + '<path')
-        .replace('stroke="#000000"', 'stroke="#4c9be8"')
-        .replace(/stroke-width="[^"]*"/, `stroke-width="${Math.max(vb[2], vb[3]) / 55}"`);
+        .replace(/stroke="#000000"/g, 'stroke="#4c9be8"')
+        .replace(/stroke-width="[^"]*"/g, `stroke-width="${Math.max(vb[2], vb[3]) / 55}"`);
       stylePrev.innerHTML = outline;
       stylePrev.style.display = 'block';
     } catch { stylePrev.style.display = 'none'; }

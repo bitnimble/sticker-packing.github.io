@@ -12,6 +12,7 @@ pub fn preview(border_svg: String, image_bytes: Vec<u8>, image_ext: String) -> R
 #[wasm_bindgen]
 pub fn auto_outline(
     points: Vec<f64>,
+    lengths: Vec<u32>,
     vb_min_x: f64,
     vb_min_y: f64,
     vb_w: f64,
@@ -22,7 +23,7 @@ pub fn auto_outline(
     stroke: f64,
 ) -> Result<String, JsValue> {
     let js = parse_join_style(&style).map_err(|e| JsValue::from_str(&e))?;
-    auto_outline_svg(&points, &[vb_min_x, vb_min_y, vb_w, vb_h], margin, round_radius, js, stroke).map_err(|e| JsValue::from_str(&e))
+    auto_outline_svg(&points, &lengths, &[vb_min_x, vb_min_y, vb_w, vb_h], margin, round_radius, js, stroke).map_err(|e| JsValue::from_str(&e))
 }
 
 #[wasm_bindgen]
