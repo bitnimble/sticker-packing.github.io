@@ -118,6 +118,28 @@ pub fn preview_svg(border_svg: &str, image_bytes: &[u8], image_ext: &str) -> Res
     ))
 }
 
+/// Angular distance of `deg` from the artwork's original orientation (0°), in [0, 180].
+fn upright_deviation(deg: f64) -> f64 {
+    let a = deg.rem_euclid(360.0);
+    a.min(360.0 - a)
+}
+
+/// If a rigid 180° turn of the whole sheet leaves the stickers nearer their original (0°)
+/// orientation, apply it. The turn is about the page centre, so content and outline stay
+/// registered and every sticker stays inside the centre-symmetric margin box -- it just fixes
+/// packings that otherwise come out predominantly upside-down.
+fn orient_upright(placements: Vec<greedy::Placement>, pw: f64, ph: f64) -> Vec<greedy::Placement> {
+    let as_is: f64 = placements.iter().map(|p| upright_deviation(p.angle)).sum();
+    let flipped: f64 = placements.iter().map(|p| upright_deviation(p.angle + 180.0)).sum();
+    if flipped >= as_is {
+        return placements;
+    }
+    placements
+        .into_iter()
+        .map(|p| greedy::Placement { angle: (p.angle + 180.0).rem_euclid(360.0), x: pw - p.x, y: ph - p.y })
+        .collect()
+}
+
 /// The whole pipeline, filesystem-free: border+image content in, four outputs out.
 /// `progress(stage, fraction)` is called at phase boundaries (0..1) for UI feedback.
 pub fn run_pack(
@@ -163,6 +185,7 @@ pub fn run_pack(
     if placements.is_empty() {
         return Err("sticker does not fit on the page (check margin / sticker width)".into());
     }
+    let placements = orient_upright(placements, pw, ph);
 
     progress("Content sheet", 0.82);
     let content_svg = output::content_svg(&inner, &outline, &norm_mat, &placements, pw, ph);
