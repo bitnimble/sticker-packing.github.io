@@ -29,6 +29,7 @@ wasm-threads = ["parallel", "dep:wasm-bindgen-rayon"]
 [dependencies]
 geo = "0.29"
 geo-types = "0.7"
+i_overlay = "1.9"
 earcutr = "0.4"
 usvg = "0.44"
 serde = { version = "1", features = ["derive"] }

@@ -3,6 +3,8 @@ use geo::{
     MultiPoint, MultiPolygon, Point, Polygon,
 };
 use geo_types::{coord, Coord};
+use i_overlay::core::fill_rule::FillRule;
+use i_overlay::float::simplify::SimplifyShape;
 use std::f64::consts::PI;
 
 pub type Poly = Polygon<f64>;
@@ -214,6 +216,176 @@ pub fn collision_body(p: &Poly) -> Multi {
     let t = convex_pieces(p);
     let nt = neg_pieces(&t);
     minkowski(&t, &nt)
+}
+
+// --- outward offset (auto-outline) ----------------------------------------
+
+/// Corner treatment for an outward offset. External = convex (bulges away from the shape),
+/// internal = concave (notches toward it).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum JoinStyle {
+    /// Round the external corners, keep internal corners sharp (natural disk dilation).
+    RoundExternal,
+    /// Round every corner.
+    RoundAll,
+    /// Miter every corner (no rounding).
+    SharpAll,
+}
+
+fn ring_signed_area(pts: &[Coord<f64>]) -> f64 {
+    let n = pts.len();
+    (0..n).map(|i| {
+        let (p, q) = (pts[i], pts[(i + 1) % n]);
+        p.x * q.y - q.x * p.y
+    }).sum::<f64>() * 0.5
+}
+
+fn unit(x: f64, y: f64) -> (f64, f64) {
+    let l = (x * x + y * y).sqrt();
+    if l < 1e-12 { (0.0, 0.0) } else { (x / l, y / l) }
+}
+
+/// Intersection of lines (p1 + t*d1) and (p2 + t*d2); None if parallel.
+fn line_intersect(p1: [f64; 2], d1: (f64, f64), p2: [f64; 2], d2: (f64, f64)) -> Option<[f64; 2]> {
+    let denom = d1.0 * d2.1 - d1.1 * d2.0;
+    if denom.abs() < 1e-12 {
+        return None;
+    }
+    let t = ((p2[0] - p1[0]) * d2.1 - (p2[1] - p1[1]) * d2.0) / denom;
+    Some([p1[0] + t * d1.0, p1[1] + t * d1.1])
+}
+
+fn shapes_to_polys(shapes: Vec<Vec<Vec<[f64; 2]>>>) -> Vec<Poly> {
+    shapes
+        .into_iter()
+        .filter_map(|shape| {
+            let mut rings = shape.into_iter().map(|c| LineString::new(c.into_iter().map(|p| coord! {x: p[0], y: p[1]}).collect()));
+            let outer = rings.next()?;
+            Some(Polygon::new(outer, rings.collect()))
+        })
+        .collect()
+}
+
+/// Round the corners of a simple polygon with fillet radius `r`, clamped per corner to half the
+/// adjacent edge lengths so neighbouring fillets never overrun. `only_convex` fillets the external
+/// corners only; the rest are left sharp.
+fn fillet_ring(pts: &[Coord<f64>], r: f64, only_convex: bool) -> Vec<[f64; 2]> {
+    let n = pts.len();
+    if n < 3 || r <= 0.0 {
+        return pts.iter().map(|c| [c.x, c.y]).collect();
+    }
+    let mut out: Vec<[f64; 2]> = Vec::with_capacity(n * 4);
+    for i in 0..n {
+        let p = pts[(i + n - 1) % n];
+        let v = pts[i];
+        let q = pts[(i + 1) % n];
+        let din = unit(v.x - p.x, v.y - p.y);
+        let dout = unit(q.x - v.x, q.y - v.y);
+        let delta = (din.0 * dout.1 - din.1 * dout.0).atan2(din.0 * dout.0 + din.1 * dout.1);
+        if delta.abs() < 1e-6 || (only_convex && delta <= 0.0) {
+            out.push([v.x, v.y]);
+            continue;
+        }
+        let tan_half = (delta.abs() / 2.0).tan();
+        let lin = ((v.x - p.x).powi(2) + (v.y - p.y).powi(2)).sqrt();
+        let lout = ((q.x - v.x).powi(2) + (q.y - v.y).powi(2)).sqrt();
+        let s = (r * tan_half).min(lin.min(lout) * 0.5); // setback along each edge
+        let r_eff = s / tan_half;
+        let t_in = [v.x - din.0 * s, v.y - din.1 * s];
+        let t_out = [v.x + dout.0 * s, v.y + dout.1 * s];
+        // centre is r_eff off the incoming edge; of the two perpendicular candidates, take the one
+        // also r_eff from the outgoing edge (i.e. tangent to both).
+        let perp = (-din.1, din.0);
+        let cand = |sgn: f64| [t_in[0] + sgn * perp.0 * r_eff, t_in[1] + sgn * perp.1 * r_eff];
+        let dist_out = |c: [f64; 2]| ((c[0] - t_out[0]) * dout.1 - (c[1] - t_out[1]) * dout.0).abs();
+        let (c1, c2) = (cand(1.0), cand(-1.0));
+        let c = if (dist_out(c1) - r_eff).abs() <= (dist_out(c2) - r_eff).abs() { c1 } else { c2 };
+        let a0 = (t_in[1] - c[1]).atan2(t_in[0] - c[0]);
+        let a1 = (t_out[1] - c[1]).atan2(t_out[0] - c[0]);
+        let d = a1 - a0;
+        let sweep = d.sin().atan2(d.cos()); // shortest signed arc from t_in to t_out
+        let steps = ((delta.abs() / (PI / 16.0)).ceil() as usize).max(1);
+        for k in 0..=steps {
+            let ang = a0 + sweep * (k as f64 / steps as f64);
+            out.push([c[0] + r_eff * ang.cos(), c[1] + r_eff * ang.sin()]);
+        }
+    }
+    out
+}
+
+/// Outward offset of a simple polygon by `m` with the given corner style. The offset is mitered
+/// first (so its distance is exactly `m`), then rounded corners are filleted with `round_radius`
+/// -- decoupling how round the corners are from how far the outline sits from the art.
+/// Self-intersections are resolved with a NonZero fill.
+pub fn offset_outline(sil: &Poly, m: f64, round_radius: f64, style: JoinStyle) -> Multi {
+    let ext = sil.exterior();
+    let mut pts: Vec<Coord<f64>> = ext.0[..ext.0.len().saturating_sub(1)].to_vec();
+    if pts.len() < 3 || m <= 0.0 {
+        return MultiPolygon::new(vec![sil.clone()]);
+    }
+    if ring_signed_area(&pts) < 0.0 {
+        pts.reverse();
+    }
+    let n = pts.len();
+    // edge i = V_i -> V_{i+1}; outward normal for a CCW ring is (dy, -dx).
+    let dir: Vec<(f64, f64)> = (0..n).map(|i| unit(pts[(i + 1) % n].x - pts[i].x, pts[(i + 1) % n].y - pts[i].y)).collect();
+    let nrm: Vec<(f64, f64)> = dir.iter().map(|d| (d.1, -d.0)).collect();
+
+    const MITER_LIMIT: f64 = 4.0;
+    let mut out: Vec<[f64; 2]> = Vec::with_capacity(n * 3);
+    for i in 0..n {
+        let pe = (i + n - 1) % n; // edge ending at V_i
+        let v = pts[i];
+        let a_off = [v.x + nrm[pe].0 * m, v.y + nrm[pe].1 * m]; // end of previous offset edge
+        let b_off = [v.x + nrm[i].0 * m, v.y + nrm[i].1 * m]; // start of this offset edge
+        // signed turn from the incoming to the outgoing edge: >0 external, <0 internal.
+        let turn = (dir[pe].0 * dir[i].1 - dir[pe].1 * dir[i].0).atan2(dir[pe].0 * dir[i].0 + dir[pe].1 * dir[i].1);
+        if turn.abs() < 1e-9 {
+            out.push(a_off);
+        } else if turn < 0.0 {
+            // internal corner: the two offset edges cross -- emit only that crossing, so neither
+            // edge overshoots past it into a dead-end spur.
+            match line_intersect(a_off, dir[pe], b_off, dir[i]) {
+                Some(x) => out.push(x),
+                None => out.push(a_off),
+            }
+        } else {
+            match line_intersect(a_off, dir[pe], b_off, dir[i]) {
+                // reject miter spikes on very sharp external corners (fall back to a bevel)
+                Some(x) if ((x[0] - v.x).powi(2) + (x[1] - v.y).powi(2)).sqrt() <= MITER_LIMIT * m => {
+                    out.push(a_off);
+                    out.push(x);
+                    out.push(b_off);
+                }
+                _ => {
+                    out.push(a_off);
+                    out.push(b_off);
+                }
+            }
+        }
+    }
+
+    let sharp = shapes_to_polys(out.simplify_shape(FillRule::NonZero, 0.0));
+    if sharp.is_empty() {
+        return MultiPolygon::new(vec![sil.clone()]);
+    }
+    if style == JoinStyle::SharpAll || round_radius <= 0.0 {
+        return MultiPolygon::new(sharp);
+    }
+    let only_convex = style == JoinStyle::RoundExternal;
+    let rings: Vec<Vec<[f64; 2]>> = sharp
+        .iter()
+        .map(|p| {
+            let e = p.exterior();
+            fillet_ring(&e.0[..e.0.len().saturating_sub(1)], round_radius, only_convex)
+        })
+        .collect();
+    let filleted = shapes_to_polys(rings.simplify_shape(FillRule::NonZero, 0.0));
+    if filleted.is_empty() {
+        MultiPolygon::new(sharp)
+    } else {
+        MultiPolygon::new(filleted)
+    }
 }
 
 // --- queries --------------------------------------------------------------

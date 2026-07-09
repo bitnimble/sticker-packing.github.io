@@ -1065,6 +1065,7 @@ dependencies = [
  "earcutr",
  "geo",
  "geo-types",
+ "i_overlay",
  "js-sys",
  "rayon",
  "resvg 0.44.0",

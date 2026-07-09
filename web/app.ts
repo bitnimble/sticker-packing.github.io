@@ -1,5 +1,6 @@
 // Main-thread UI. Live preview runs here (fast, synchronous); packing runs in a Web Worker.
-import init, { preview } from './sticker_packer.js';
+import init, { preview, auto_outline } from './sticker_packer.js';
+import { traceArt, type Traced } from './trace.js';
 import type { PackArgs, ProgressFn, WorkerOut, WorkerResult } from './types.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -12,8 +13,10 @@ const setStatus = (msg: string, cls = ''): void => {
 interface BorderFile { text: string; url: string; }
 interface ImageFile { bytes: Uint8Array; ext: string; url: string | null; }
 
-let border: BorderFile | null = null;
+let border: BorderFile | null = null; // active border (manual upload or auto-generated)
+let manualBorder: BorderFile | null = null;
 let image: ImageFile = { bytes: new Uint8Array(0), ext: '', url: null };
+let traced: Traced | null = null; // silhouette of the current art, for auto-outline
 let previewReady = false;
 let workerReady = false;
 
@@ -109,18 +112,16 @@ function clearCard(kind: string): void {
 
 wireDrop('borderDrop', 'borderFile', async (file) => {
   const text = await file.text();
-  if (border?.url) URL.revokeObjectURL(border.url);
-  border = { text, url: URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' })) };
-  showCard('border', border.url, file.name);
-  maybeEnable();
-  updatePreview();
+  if (manualBorder?.url) URL.revokeObjectURL(manualBorder.url);
+  manualBorder = { text, url: URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' })) };
+  showCard('border', manualBorder.url, file.name);
+  if (!autoEnabled()) { border = manualBorder; maybeEnable(); updatePreview(); }
 });
 $('borderClear').addEventListener('click', () => {
-  if (border?.url) URL.revokeObjectURL(border.url);
-  border = null;
+  if (manualBorder?.url) URL.revokeObjectURL(manualBorder.url);
+  manualBorder = null;
   clearCard('border');
-  maybeEnable();
-  updatePreview();
+  if (!autoEnabled()) { border = null; maybeEnable(); updatePreview(); }
 });
 
 wireDrop('imageDrop', 'imageFile', async (file) => {
@@ -131,14 +132,107 @@ wireDrop('imageDrop', 'imageFile', async (file) => {
   const url = URL.createObjectURL(new Blob([buf], { type: mime }));
   image = { bytes: buf, ext, url };
   showCard('image', url, file.name);
-  updatePreview();
+  await onArtChanged();
 });
 $('imageClear').addEventListener('click', () => {
   if (image.url) URL.revokeObjectURL(image.url);
   image = { bytes: new Uint8Array(0), ext: '', url: null };
+  traced = null;
+  previewCache.clear();
   clearCard('image');
+  if (autoEnabled()) regenAuto();
   updatePreview();
 });
+
+// --- auto-outline (generate the border by dilating the art silhouette) ---
+const autoEnabled = (): boolean => $<HTMLInputElement>('autoOutline').checked;
+const currentStyle = (): string => (document.querySelector('input[name=autostyle]:checked') as HTMLInputElement | null)?.value ?? 'external';
+const previewCache = new Map<string, string>(); // "style:margin" -> outline SVG for the current art
+
+function clearAutoBorder(): void {
+  if (border && border !== manualBorder && border.url) URL.revokeObjectURL(border.url);
+  border = null;
+}
+function genOutline(style: string): string {
+  if (!traced) throw new Error('no traced art');
+  // autoMargin is in mm; the silhouette is in the art's viewBox units. Convert via the sticker
+  // width (blank => viewBox units are treated as mm 1:1 by the packer).
+  const marginMm = num('autoMargin', 2);
+  const stickerW = num('width', 0);
+  const margin = stickerW > 0 ? marginMm * (traced.vb[2] / stickerW) : marginMm;
+  const key = style + ':' + marginMm + ':' + stickerW;
+  const hit = previewCache.get(key);
+  if (hit) return hit;
+  const stroke = Math.max(traced.vb[2], traced.vb[3]) / 150;
+  const roundRadius = margin * 4; // corners noticeably rounder than the bleed distance
+  const svg = auto_outline(new Float64Array(traced.points), traced.vb[0], traced.vb[1], traced.vb[2], traced.vb[3], margin, roundRadius, style, stroke);
+  previewCache.set(key, svg);
+  return svg;
+}
+async function traceCurrentArt(): Promise<void> {
+  traced = null;
+  previewCache.clear();
+  if (!image.url) return;
+  try { traced = await traceArt({ bytes: image.bytes, ext: image.ext, url: image.url }); } catch { traced = null; }
+}
+function regenAuto(): void {
+  if (!autoEnabled()) return;
+  const err = $('autoErr');
+  clearAutoBorder();
+  try {
+    if (!traced) throw new Error(image.url ? 'could not trace the art silhouette' : 'add art first to auto-create the outline');
+    const svg = genOutline(currentStyle());
+    border = { text: svg, url: URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })) };
+    err.style.display = 'none';
+  } catch (e) {
+    err.textContent = String((e as Error)?.message ?? e);
+    err.style.display = 'block';
+  }
+  maybeEnable();
+  updatePreview();
+}
+async function onArtChanged(): Promise<void> {
+  if (autoEnabled()) { await traceCurrentArt(); regenAuto(); }
+  updatePreview();
+}
+
+$('autoOutline').addEventListener('change', async () => {
+  const on = autoEnabled();
+  $('borderManual').style.display = on ? 'none' : 'block';
+  $('autoOpts').style.display = on ? 'block' : 'none';
+  if (on) {
+    if (!traced && image.url) await traceCurrentArt();
+    regenAuto();
+  } else {
+    clearAutoBorder();
+    border = manualBorder;
+    $('autoErr').style.display = 'none';
+    maybeEnable();
+    updatePreview();
+  }
+});
+$('autoMargin').addEventListener('input', () => { previewCache.clear(); regenAuto(); });
+$('width').addEventListener('input', () => { previewCache.clear(); regenAuto(); });
+document.querySelectorAll('input[name=autostyle]').forEach((r) => r.addEventListener('change', regenAuto));
+
+const stylePrev = $('stylePreview');
+$('styleOpts').querySelectorAll('label').forEach((lab) => {
+  const val = (lab.querySelector('input') as HTMLInputElement).value;
+  lab.addEventListener('mouseenter', () => {
+    if (!traced || !image.url) { stylePrev.style.display = 'none'; return; }
+    try {
+      const vb = traced.vb;
+      const art = `<image href="${image.url}" x="${vb[0]}" y="${vb[1]}" width="${vb[2]}" height="${vb[3]}" preserveAspectRatio="none"/>`;
+      const outline = genOutline(val)
+        .replace('<path', art + '<path')
+        .replace('stroke="#000000"', 'stroke="#4c9be8"')
+        .replace(/stroke-width="[^"]*"/, `stroke-width="${Math.max(vb[2], vb[3]) / 55}"`);
+      stylePrev.innerHTML = outline;
+      stylePrev.style.display = 'block';
+    } catch { stylePrev.style.display = 'none'; }
+  });
+});
+$('styleOpts').addEventListener('mouseleave', () => { stylePrev.style.display = 'none'; });
 
 // --- options -------------------------------------------------------------
 function num(id: string, fallback: number): number {

@@ -73,6 +73,13 @@
   }
   .dl a:hover { border-color: var(--accent); }
   #previewImg svg { display: block; max-height: 280px; max-width: 100%; height: auto; width: auto; }
+  .stylerow { display: flex; gap: 12px; align-items: flex-start; margin-top: 6px; }
+  .styleopts { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; }
+  .styleopts label { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+  .styleopts label:hover { border-color: var(--accent); }
+  .styleopts input[type=radio] { accent-color: var(--accent); flex: none; }
+  #stylePreview { width: 128px; height: 128px; border: 1px solid var(--line); border-radius: 8px; flex: none; display: none; }
+  #stylePreview svg { width: 100%; height: 100%; display: block; }
 </style>
 </head>
 <body>
@@ -80,18 +87,6 @@
   <h1>Sticker Packer</h1>
 
   <div class="grid">
-    <div class="panel">
-      <h2>Outline SVG</h2>
-      <div class="drop" id="borderDrop">
-        <div>Drop or click to choose the <b>outline</b> .svg</div>
-        <input type="file" id="borderFile" accept=".svg,image/svg+xml">
-      </div>
-      <div class="filecard" id="borderCard" style="display:none">
-        <img class="checker" id="borderThumbImg"><span class="name" id="borderName"></span>
-        <button class="clear" id="borderClear" title="Remove">✕</button>
-      </div>
-    </div>
-
     <div class="panel">
       <h2>Art</h2>
       <div class="drop" id="imageDrop">
@@ -101,6 +96,36 @@
       <div class="filecard" id="imageCard" style="display:none">
         <img class="checker" id="imageThumbImg"><span class="name" id="imageName"></span>
         <button class="clear" id="imageClear" title="Remove">✕</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Outline SVG</h2>
+      <label class="row" style="margin-bottom:12px"><input type="checkbox" id="autoOutline"> <span>Automatically create outline SVG</span></label>
+
+      <div id="borderManual">
+        <div class="drop" id="borderDrop">
+          <div>Drop or click to choose the <b>outline</b> .svg</div>
+          <input type="file" id="borderFile" accept=".svg,image/svg+xml">
+        </div>
+        <div class="filecard" id="borderCard" style="display:none">
+          <img class="checker" id="borderThumbImg"><span class="name" id="borderName"></span>
+          <button class="clear" id="borderClear" title="Remove">✕</button>
+        </div>
+      </div>
+
+      <div id="autoOpts" style="display:none">
+        <label style="margin-bottom:12px"><div class="lab">Margin (mm)</div><input type="number" id="autoMargin" value="2" step="0.5" min="0"></label>
+        <div class="lab">Corner style</div>
+        <div class="stylerow">
+          <div class="styleopts" id="styleOpts">
+            <label><input type="radio" name="autostyle" value="external" checked> Rounded outer corners</label>
+            <label><input type="radio" name="autostyle" value="all"> Rounded corners</label>
+            <label><input type="radio" name="autostyle" value="sharp"> Sharp corners</label>
+          </div>
+          <div class="checker" id="stylePreview"></div>
+        </div>
+        <div id="autoErr" class="status err" style="display:none;margin-top:8px"></div>
       </div>
     </div>
   </div>
@@ -171,14 +196,14 @@
   <div class="results" id="results">
     <div class="sheets">
       <div class="sheet">
-        <h3>Outline sheet<span style="color:var(--muted);font-weight:400">, cut this</span></h3>
-        <img id="outlineImg" alt="outline preview">
-        <div class="dl" id="outlineDl"></div>
-      </div>
-      <div class="sheet">
         <h3>Content sheet<span style="color:var(--muted);font-weight:400">, print this</span></h3>
         <img id="contentImg" alt="content preview">
         <div class="dl" id="contentDl"></div>
+      </div>
+      <div class="sheet">
+        <h3>Outline sheet<span style="color:var(--muted);font-weight:400">, cut this</span></h3>
+        <img id="outlineImg" alt="outline preview">
+        <div class="dl" id="outlineDl"></div>
       </div>
     </div>
   </div>

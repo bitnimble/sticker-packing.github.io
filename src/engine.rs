@@ -118,6 +118,31 @@ pub fn preview_svg(border_svg: &str, image_bytes: &[u8], image_ext: &str) -> Res
     ))
 }
 
+pub fn parse_join_style(s: &str) -> Result<JoinStyle, String> {
+    Ok(match s {
+        "external" => JoinStyle::RoundExternal,
+        "all" => JoinStyle::RoundAll,
+        "sharp" => JoinStyle::SharpAll,
+        o => return Err(format!("unknown outline style '{o}' (external|all|sharp)")),
+    })
+}
+
+/// Build an outline SVG by offsetting a traced art silhouette (viewBox-unit `points`, flattened
+/// x,y pairs) outward by `margin` with the given corner style. The result shares the art's
+/// viewBox, so it drops straight into the pipeline as the border.
+pub fn auto_outline_svg(points: &[f64], vb: &[f64; 4], margin: f64, round_radius: f64, style: JoinStyle, stroke: f64) -> Result<String, String> {
+    if points.len() < 6 {
+        return Err("need at least 3 silhouette points".into());
+    }
+    let ring: Vec<(f64, f64)> = points.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+    let outline = largest(&offset_outline(&poly_from(&ring), margin, round_radius, style));
+    Ok(format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"{} {} {} {}\">\
+         <path d=\"{}\" fill=\"none\" stroke=\"#000000\" stroke-width=\"{}\"/></svg>",
+        vb[2], vb[3], vb[0], vb[1], vb[2], vb[3], output::poly_d(&outline), stroke
+    ))
+}
+
 /// Angular distance of `deg` from the artwork's original orientation (0°), in [0, 180].
 fn upright_deviation(deg: f64) -> f64 {
     let a = deg.rem_euclid(360.0);
