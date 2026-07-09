@@ -60,11 +60,14 @@ pub fn content_svg(inner: &str, border_vb: &Poly, norm: &Mat, placements: &[Plac
 /// stroked cut lines. `norm_border` is the normalized (packing-space) border polygon.
 pub fn outline_svg(norm_border: &Poly, placements: &[Placement], pw: f64, ph: f64, stroke: f64) -> String {
     let mut s = header(pw, ph);
+    // Define the cut path ONCE (place_mat is rigid, so stroke width stays uniform) and <use> it
+    // per placement -- otherwise the full-resolution border is re-formatted for every sticker,
+    // which dominates runtime for high-vertex outlines.
+    s.push_str(&format!("<defs><path id=\"cut\" d=\"{}\"/></defs>\n", poly_d(norm_border)));
     for p in placements {
-        let poly = transform_poly(norm_border, &place_mat(p.angle, p.x, p.y));
         s.push_str(&format!(
-            "<path d=\"{}\" fill=\"none\" stroke=\"#000000\" stroke-width=\"{stroke}\"/>\n",
-            poly_d(&poly)
+            "<use xlink:href=\"#cut\" transform=\"{}\" fill=\"none\" stroke=\"#000000\" stroke-width=\"{stroke}\"/>\n",
+            svg_matrix(&place_mat(p.angle, p.x, p.y))
         ));
     }
     s.push_str("</svg>\n");

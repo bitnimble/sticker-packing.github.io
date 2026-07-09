@@ -1,5 +1,11 @@
-use crate::engine::{run_pack, Params};
+use crate::engine::{preview_svg, run_pack, Params};
 use wasm_bindgen::prelude::*;
+
+/// Standalone SVG of one clipped sticker (art masked to the border), for a live preview.
+#[wasm_bindgen]
+pub fn preview(border_svg: String, image_bytes: Vec<u8>, image_ext: String) -> Result<String, JsValue> {
+    preview_svg(&border_svg, &image_bytes, &image_ext).map_err(|e| JsValue::from_str(&e))
+}
 
 #[wasm_bindgen]
 pub struct PackResult {
@@ -49,12 +55,12 @@ pub fn pack(
     spacing: f64,
     method: String,
     rotations: u32,
-    landscape: bool,
     max_count: i32,
     simplify: f64,
     greedy_attempts: u32,
     stroke: f64,
     want_pdf: bool,
+    on_progress: js_sys::Function,
 ) -> Result<PackResult, JsValue> {
     let p = Params {
         sticker_width: (sticker_width > 0.0).then_some(sticker_width),
@@ -64,14 +70,17 @@ pub fn pack(
         spacing,
         method,
         rotations: rotations as usize,
-        landscape,
+        landscape: false,
         max_count: (max_count >= 0).then_some(max_count as usize),
         simplify,
         greedy_attempts: greedy_attempts as usize,
         stroke,
         want_pdf,
     };
-    let out = run_pack(&border_svg, &image_bytes, &image_ext, &p).map_err(|e| JsValue::from_str(&e))?;
+    let progress = |stage: &str, frac: f64| {
+        let _ = on_progress.call2(&JsValue::NULL, &JsValue::from_str(stage), &JsValue::from_f64(frac));
+    };
+    let out = run_pack(&border_svg, &image_bytes, &image_ext, &p, &progress).map_err(|e| JsValue::from_str(&e))?;
     Ok(PackResult {
         count: out.count,
         content_svg: out.content_svg,

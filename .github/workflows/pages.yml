@@ -40,6 +40,7 @@ jobs:
         run: |
           mkdir -p site
           cp web/index.html site/index.html
+          cp web/worker.js site/worker.js
           cp pkg/sticker_packer.js site/sticker_packer.js
           cp pkg/sticker_packer_bg.wasm site/sticker_packer_bg.wasm
           touch site/.nojekyll   # serve files verbatim, no Jekyll processing

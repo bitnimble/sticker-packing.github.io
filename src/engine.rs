@@ -89,12 +89,36 @@ pub fn build_inner(border_svg: &str, image_bytes: &[u8], image_ext: &str, outlin
     ))
 }
 
+/// A standalone SVG of ONE sticker: the art clipped to the border shape, in the border's
+/// viewBox. Uses the exact same outline + clip + raster-embed logic as the packed output, so
+/// the preview matches what a placed sticker will look like.
+pub fn preview_svg(border_svg: &str, image_bytes: &[u8], image_ext: &str) -> Result<String, String> {
+    let outline = svgio::load_outline_str(border_svg)?;
+    let inner = build_inner(border_svg, image_bytes, image_ext, &outline)?;
+    let vb = svgio::read_viewbox_str(border_svg)?;
+    let clip = output::poly_d(&outline);
+    Ok(format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
+         viewBox=\"{} {} {} {}\"><defs><clipPath id=\"c\" clipPathUnits=\"userSpaceOnUse\">\
+         <path d=\"{}\"/></clipPath></defs><g clip-path=\"url(#c)\">{}</g></svg>",
+        vb[0], vb[1], vb[2], vb[3], clip, inner
+    ))
+}
+
 /// The whole pipeline, filesystem-free: border+image content in, four outputs out.
-pub fn run_pack(border_svg: &str, image_bytes: &[u8], image_ext: &str, p: &Params) -> Result<Outputs, String> {
+/// `progress(stage, fraction)` is called at phase boundaries (0..1) for UI feedback.
+pub fn run_pack(
+    border_svg: &str,
+    image_bytes: &[u8],
+    image_ext: &str,
+    p: &Params,
+    progress: &dyn Fn(&str, f64),
+) -> Result<Outputs, String> {
     let (mut pw, mut ph) = (p.page_w, p.page_h);
     if p.landscape {
         std::mem::swap(&mut pw, &mut ph);
     }
+    progress("Preparing", 0.05);
     let outline = svgio::load_outline_str(border_svg)?;
     let inner = build_inner(border_svg, image_bytes, image_ext, &outline)?;
     let (norm, norm_mat) = normalize(&outline, p.sticker_width);
@@ -105,10 +129,18 @@ pub fn run_pack(border_svg: &str, image_bytes: &[u8], image_ext: &str, p: &Param
     let rots: Vec<f64> = (0..n).map(|i| (i as f64 * 360.0 / n as f64 * 1e6).round() / 1e6).collect();
 
     let placements = match p.method.as_str() {
-        "greedy" => greedy::pack(&grown, &rots, pw, ph, p.margin, p.max_count, p.greedy_attempts),
-        "lattice" => lattice::pack(&grown, &rots, pw, ph, p.margin, p.max_count),
+        "greedy" => {
+            progress("Packing (greedy)", 0.15);
+            greedy::pack(&grown, &rots, pw, ph, p.margin, p.max_count, p.greedy_attempts)
+        }
+        "lattice" => {
+            progress("Packing (lattice)", 0.15);
+            lattice::pack(&grown, &rots, pw, ph, p.margin, p.max_count)
+        }
         "both" => {
+            progress("Packing (greedy)", 0.15);
             let g = greedy::pack(&grown, &rots, pw, ph, p.margin, p.max_count, p.greedy_attempts);
+            progress("Packing (lattice)", 0.5);
             let l = lattice::pack(&grown, &rots, pw, ph, p.margin, p.max_count);
             if g.len() >= l.len() { g } else { l }
         }
@@ -118,13 +150,17 @@ pub fn run_pack(border_svg: &str, image_bytes: &[u8], image_ext: &str, p: &Param
         return Err("sticker does not fit on the page (check margin / sticker width)".into());
     }
 
+    progress("Content sheet", 0.82);
     let content_svg = output::content_svg(&inner, &outline, &norm_mat, &placements, pw, ph);
+    progress("Outline sheet", 0.86);
     let outline_svg = output::outline_svg(&norm, &placements, pw, ph, p.stroke);
     let (content_pdf, outline_pdf) = if p.want_pdf {
+        progress("Rendering PDF", 0.9);
         (pdf_of(&content_svg)?, pdf_of(&outline_svg)?)
     } else {
         (Vec::new(), Vec::new())
     };
+    progress("Done", 1.0);
     Ok(Outputs { count: placements.len(), content_svg, outline_svg, content_pdf, outline_pdf })
 }
 
