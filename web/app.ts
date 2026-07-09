@@ -160,23 +160,29 @@ function genOutline(style: string): string {
   const marginMm = num('autoMargin', 2);
   const stickerW = num('width', 0);
   const margin = stickerW > 0 ? marginMm * (traced.vb[2] / stickerW) : marginMm;
-  const key = style + ':' + marginMm + ':' + stickerW;
+  // Roundness (0-100): extra convex-corner rounding, as a fraction of the shape size.
+  const roundness = num('autoRound', 0);
+  const roundRadius = (roundness / 100) * 0.12 * Math.min(traced.vb[2], traced.vb[3]);
+  const key = style + ':' + marginMm + ':' + stickerW + ':' + roundness;
   const hit = previewCache.get(key);
   if (hit) return hit;
   const flat: number[] = [];
   const lengths: number[] = [];
   for (const c of traced.contours) { lengths.push(c.length / 2); for (const v of c) flat.push(v); }
   const stroke = Math.max(traced.vb[2], traced.vb[3]) / 150;
-  const roundRadius = margin * 4; // corners noticeably rounder than the bleed distance
   const svg = auto_outline(new Float64Array(flat), new Uint32Array(lengths), traced.vb[0], traced.vb[1], traced.vb[2], traced.vb[3], margin, roundRadius, style, stroke);
   previewCache.set(key, svg);
   return svg;
+}
+// Simplification (0-100): Douglas-Peucker tolerance on the traced silhouette, in trace pixels.
+function simplifyPx(): number {
+  return 1 + Math.pow(num('autoSimplify', 0) / 100, 1.5) * 60;
 }
 async function traceCurrentArt(): Promise<void> {
   traced = null;
   previewCache.clear();
   if (!image.url) return;
-  try { traced = await traceArt({ bytes: image.bytes, ext: image.ext, url: image.url }); } catch { traced = null; }
+  try { traced = await traceArt({ bytes: image.bytes, ext: image.ext, url: image.url }, simplifyPx()); } catch { traced = null; }
 }
 function regenAuto(): void {
   if (!autoEnabled()) return;
@@ -216,6 +222,8 @@ $('autoOutline').addEventListener('change', async () => {
 });
 $('autoMargin').addEventListener('input', () => { previewCache.clear(); regenAuto(); });
 $('width').addEventListener('input', () => { previewCache.clear(); regenAuto(); });
+$('autoRound').addEventListener('input', () => { previewCache.clear(); regenAuto(); });
+$('autoSimplify').addEventListener('input', async () => { await traceCurrentArt(); regenAuto(); });
 document.querySelectorAll('input[name=autostyle]').forEach((r) => r.addEventListener('change', regenAuto));
 
 const stylePrev = $('stylePreview');

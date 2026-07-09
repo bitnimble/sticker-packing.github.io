@@ -16,7 +16,7 @@ export interface Traced {
 export interface ArtFile { bytes: Uint8Array; ext: string; url: string; }
 
 const MAX_DIM = 800; // cap tracing raster resolution for speed
-const ALPHA = 128; // opacity threshold
+const ALPHA = 24; // opacity threshold -- low, so faint/wispy edges (hair) count as content
 const BG_TOL2 = 60 * 60; // squared RGB distance from background that counts as content
 
 function readViewBox(svg: string): [number, number, number, number] | null {
@@ -28,11 +28,10 @@ function readViewBox(svg: string): [number, number, number, number] | null {
 
 async function loadImage(url: string): Promise<HTMLImageElement> {
   const img = new Image();
-  await new Promise<void>((res, rej) => {
-    img.onload = () => res();
-    img.onerror = () => rej(new Error('could not load art image'));
-    img.src = url;
-  });
+  img.src = url;
+  // decode() (not onload) guarantees the pixels are ready before we drawImage; onload can fire
+  // early on large images, sampling a partially-decoded bitmap and giving non-deterministic masks.
+  await img.decode();
   return img;
 }
 
@@ -125,42 +124,23 @@ function label(mask: Uint8Array, w: number, h: number): { labels: Int32Array; si
   return { labels, sizes };
 }
 
-// Convex hull (Andrew's monotone chain).
-function convexHull(pts: number[][]): number[][] {
-  if (pts.length < 3) return pts;
-  const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const cross = (o: number[], a: number[], b: number[]) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-  const half = (src: number[][]): number[][] => {
-    const out: number[][] = [];
-    for (const pt of src) {
-      while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], pt) <= 0) out.pop();
-      out.push(pt);
-    }
-    out.pop();
-    return out;
-  };
-  return half(p).concat(half(p.slice().reverse()));
-}
-
-// Rasterize a convex polygon (orientation-agnostic point-in-polygon over its bounding box).
-function fillHull(hull: number[][], w: number, h: number): Uint8Array {
-  const m = new Uint8Array(w * h);
-  const n = hull.length;
-  if (n < 3) return m;
-  let minx = w, miny = h, maxx = 0, maxy = 0;
-  for (const [x, y] of hull) { minx = Math.min(minx, x); miny = Math.min(miny, y); maxx = Math.max(maxx, x); maxy = Math.max(maxy, y); }
-  for (let y = Math.max(0, miny | 0); y <= Math.min(h - 1, maxy | 0); y++) {
-    for (let x = Math.max(0, minx | 0); x <= Math.min(w - 1, maxx | 0); x++) {
-      let pos = false, neg = false;
-      for (let i = 0; i < n; i++) {
-        const a = hull[i], b = hull[(i + 1) % n];
-        const c = (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
-        if (c > 0) pos = true; else if (c < 0) neg = true;
-      }
-      if (!(pos && neg)) m[y * w + x] = 1;
-    }
+// Fill interior holes: flood the background inward from the border; any background not reached is
+// enclosed by content (e.g. white clothing/highlights inside the subject) so make it content.
+function fillHoles(mask: Uint8Array, w: number, h: number): void {
+  const outside = new Uint8Array(w * h);
+  const stack: number[] = [];
+  const push = (i: number) => { if (!mask[i] && !outside[i]) { outside[i] = 1; stack.push(i); } };
+  for (let x = 0; x < w; x++) { push(x); push((h - 1) * w + x); }
+  for (let y = 0; y < h; y++) { push(y * w); push(y * w + w - 1); }
+  while (stack.length) {
+    const p = stack.pop() as number;
+    const x = p % w, y = (p / w) | 0;
+    if (x > 0) push(p - 1);
+    if (x < w - 1) push(p + 1);
+    if (y > 0) push(p - w);
+    if (y < h - 1) push(p + w);
   }
-  return m;
+  for (let i = 0; i < w * h; i++) if (!mask[i] && !outside[i]) mask[i] = 1;
 }
 
 // Clockwise Moore-neighbour boundary trace of the component with the given label.
@@ -229,62 +209,32 @@ function simplify(pts: number[][], eps: number): number[][] {
   return a.slice(0, -1).concat(b.slice(0, -1));
 }
 
-export async function traceArt(art: ArtFile): Promise<Traced> {
+export async function traceArt(art: ArtFile, simplifyPx = 1.5): Promise<Traced> {
   const { px, w, h, vb, scale } = await rasterize(art);
   const mask = contentMask(px, w, h);
+  fillHoles(mask, w, h); // solid interior, so bright/white regions inside the subject don't punch holes
   const { labels, sizes } = label(mask, w, h);
   const firstPixel = new Int32Array(sizes.length).fill(-1);
   for (let i = 0; i < w * h; i++) { const l = labels[i]; if (l && firstPixel[l] < 0) firstPixel[l] = i; }
 
-  const minSize = Math.max(4, Math.round(w * h * 1e-5)); // keep small particles, drop stray noise
+  const minSize = Math.max(4, Math.round(w * h * 1e-5)); // keep small elements, drop stray noise
   const kept = Array.from({ length: sizes.length - 1 }, (_, k) => k + 1)
     .filter((id) => sizes[id] >= minSize)
     .sort((a, b) => sizes[b] - sizes[a])
     .slice(0, 400);
   if (!kept.length) throw new Error('no content found in the art');
 
-  // A sticker is one cohesive cut piece. A single component keeps its own (concave) outline. With
-  // several components, fill the convex-hull pockets that lie *between* two or more components (the
-  // inter-shape gaps) but leave a single shape's own notches alone -- so the shapes fuse into one
-  // solid landmass flush at the gaps, while every outer concavity is preserved.
-  let ringPix: number[][];
-  if (kept.length === 1) {
-    ringPix = mooreTrace(labels, w, h, kept[0], firstPixel[kept[0]]);
-  } else {
-    const keep = new Uint8Array(sizes.length);
-    for (const id of kept) keep[id] = 1;
-    const content = new Uint8Array(w * h);
-    for (let i = 0; i < w * h; i++) content[i] = keep[labels[i]] ? 1 : 0;
-
-    const hullPts: number[][] = [];
-    for (const id of kept) for (const pt of mooreTrace(labels, w, h, id, firstPixel[id])) hullPts.push(pt);
-    const hull = fillHull(convexHull(hullPts), w, h);
-
-    const empty = new Uint8Array(w * h);
-    for (let i = 0; i < w * h; i++) empty[i] = hull[i] && !content[i] ? 1 : 0;
-    const pockets = label(empty, w, h);
-    const bound: Set<number>[] = Array.from({ length: pockets.sizes.length }, () => new Set());
-    for (let i = 0; i < w * h; i++) {
-      if (!empty[i]) continue;
-      const pk = pockets.labels[i], x = i % w, y = (i / w) | 0;
-      for (const q of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1]) {
-        if (q >= 0 && content[q]) bound[pk].add(labels[q]);
-      }
-    }
-    const filled = content;
-    for (let i = 0; i < w * h; i++) if (empty[i] && bound[pockets.labels[i]].size >= 2) filled[i] = 1;
-
-    const fl = label(filled, w, h);
-    let mainId = 0, best = 0;
-    for (let id = 1; id < fl.sizes.length; id++) if (fl.sizes[id] > best) { best = fl.sizes[id]; mainId = id; }
-    let start = -1;
-    for (let i = 0; i < w * h; i++) if (fl.labels[i] === mainId) { start = i; break; }
-    ringPix = mooreTrace(fl.labels, w, h, mainId, start);
+  // Trace every kept component (subject, text, watermark, particles) -- nothing is dropped. The
+  // offset stage dilates and unions them, so adjacent pieces (e.g. neighbouring letters) fuse while
+  // separate elements each keep their own outline.
+  const contours: number[][] = [];
+  for (const id of kept) {
+    const ring = simplify(mooreTrace(labels, w, h, id, firstPixel[id]), simplifyPx);
+    if (ring.length < 3) continue;
+    const flat: number[] = [];
+    for (const [x, y] of ring) flat.push(vb[0] + x * scale, vb[1] + y * scale);
+    contours.push(flat);
   }
-
-  const ring = simplify(ringPix, 1.5);
-  if (ring.length < 3) throw new Error('no content found in the art');
-  const flat: number[] = [];
-  for (const [x, y] of ring) flat.push(vb[0] + x * scale, vb[1] + y * scale);
-  return { contours: [flat], vb };
+  if (!contours.length) throw new Error('no content found in the art');
+  return { contours, vb };
 }
