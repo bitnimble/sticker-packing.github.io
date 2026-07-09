@@ -57,20 +57,23 @@ function maybeEnable(): void {
 }
 
 // --- live preview (main thread) ------------------------------------------
-let previewUrl: string | null = null;
+// Rendered as inline SVG (not <img src>) so a raster's `<image>` can reference the art's
+// already-decoded blob URL -- <img>-hosted SVG runs in secure static mode and blocks external
+// refs, forcing a slow base64 embed + re-decode instead.
+const ART_HREF = '__ART_HREF__';
 function updatePreview(): void {
   if (!previewReady || !border) { $('previewPanel').style.display = 'none'; return; }
   const err = $('previewErr');
-  const img = $<HTMLImageElement>('previewImg');
+  const box = $('previewImg');
   try {
-    const svg = preview(border.text, image.bytes, image.ext);
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    previewUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
-    img.src = previewUrl;
-    img.style.display = '';
+    let svg = preview(border.text, image.bytes, image.ext);
+    if (image.url) svg = svg.replace(ART_HREF, image.url);
+    box.innerHTML = svg;
+    box.style.display = '';
     err.style.display = 'none';
   } catch (e: unknown) {
-    img.style.display = 'none';
+    box.innerHTML = '';
+    box.style.display = 'none';
     err.textContent = String((e as Error)?.message ?? e);
     err.style.display = 'block';
   }

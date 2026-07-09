@@ -61,10 +61,22 @@ pub struct Outputs {
     pub outline_pdf: Vec<u8>,
 }
 
+/// Placeholder href the preview emits for a raster instead of a multi-MB base64 data-URI; the
+/// web UI swaps it for the art's already-decoded blob URL so the preview renders instantly.
+pub const PREVIEW_ART_HREF: &str = "__ART_HREF__";
+
 /// Content-sheet artwork (viewBox-unit inner markup): SVG image inlined (shared viewBox
-/// required), or a raster embedded as a base64 <image> covering the border bbox. Empty ext =
-/// no separate image, so the border itself is the art.
-pub fn build_inner(border_svg: &str, image_bytes: &[u8], image_ext: &str, outline: &Poly) -> Result<String, String> {
+/// required), or a raster `<image>` covering the whole artboard (its resolution matches the
+/// viewBox, so it maps 1:1 onto it and the border clip masks it to the sticker). Empty ext = no
+/// separate image, so the border itself is the art. `raster_href` overrides the embedded
+/// base64 data-URI (used by the preview to reference a blob URL instead).
+pub fn build_inner(
+    border_svg: &str,
+    image_bytes: &[u8],
+    image_ext: &str,
+    vb: &[f64; 4],
+    raster_href: Option<&str>,
+) -> Result<String, String> {
     let ext = image_ext.trim().trim_start_matches('.').to_ascii_lowercase();
     let mime = match ext.as_str() {
         "" => return svgio::load_inner_svg_str(border_svg),
@@ -80,28 +92,29 @@ pub fn build_inner(border_svg: &str, image_bytes: &[u8], image_ext: &str, outlin
         "webp" => "image/webp",
         other => return Err(format!("unsupported image type: .{other}")),
     };
-    let b64 = base64::engine::general_purpose::STANDARD.encode(image_bytes);
-    let (x0, y0, x1, y1) = poly_bbox(outline);
+    let href = match raster_href {
+        Some(h) => h.to_string(),
+        None => format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(image_bytes)),
+    };
     Ok(format!(
-        "<image xlink:href=\"data:{mime};base64,{b64}\" x=\"{x0}\" y=\"{y0}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"xMidYMid slice\"/>",
-        x1 - x0,
-        y1 - y0
+        "<image xlink:href=\"{href}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\"/>",
+        vb[0], vb[1], vb[2], vb[3]
     ))
 }
 
 /// A standalone SVG of ONE sticker: the art clipped to the border shape, in the border's
-/// viewBox. Uses the exact same outline + clip + raster-embed logic as the packed output, so
-/// the preview matches what a placed sticker will look like.
+/// viewBox. Uses the same outline + clip + art logic as the packed output so the preview
+/// matches a placed sticker; rasters reference PREVIEW_ART_HREF rather than embedding base64.
 pub fn preview_svg(border_svg: &str, image_bytes: &[u8], image_ext: &str) -> Result<String, String> {
     let outline = svgio::load_outline_str(border_svg)?;
-    let inner = build_inner(border_svg, image_bytes, image_ext, &outline)?;
     let vb = svgio::read_viewbox_str(border_svg)?;
+    let inner = build_inner(border_svg, image_bytes, image_ext, &vb, Some(PREVIEW_ART_HREF))?;
     let clip = output::poly_d(&outline);
     Ok(format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
-         viewBox=\"{} {} {} {}\"><defs><clipPath id=\"c\" clipPathUnits=\"userSpaceOnUse\">\
+         width=\"{}\" height=\"{}\" viewBox=\"{} {} {} {}\"><defs><clipPath id=\"c\" clipPathUnits=\"userSpaceOnUse\">\
          <path d=\"{}\"/></clipPath></defs><g clip-path=\"url(#c)\">{}</g></svg>",
-        vb[0], vb[1], vb[2], vb[3], clip, inner
+        vb[2], vb[3], vb[0], vb[1], vb[2], vb[3], clip, inner
     ))
 }
 
@@ -120,7 +133,8 @@ pub fn run_pack(
     }
     progress("Preparing", 0.05);
     let outline = svgio::load_outline_str(border_svg)?;
-    let inner = build_inner(border_svg, image_bytes, image_ext, &outline)?;
+    let vb = svgio::read_viewbox_str(border_svg)?;
+    let inner = build_inner(border_svg, image_bytes, image_ext, &vb, None)?;
     let (norm, norm_mat) = normalize(&outline, p.sticker_width);
     let packing = simplify_poly(&norm, p.simplify);
     let grown = simplify_poly(&buffer(&packing, p.spacing / 2.0 + 1e-4, 16), p.simplify);
