@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sticker Packer</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #171c22; --line: #262d36; --ink: #e6ebf0;
+    --muted: #93a1b0; --accent: #4c9be8; --accent-ink: #06121f; --ok: #3fb96a; --err: #e5604d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
+  h1 { font-size: 22px; margin: 0 0 2px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  .drop {
+    border: 1.5px dashed var(--line); border-radius: 10px; padding: 18px; text-align: center;
+    cursor: pointer; transition: border-color .15s, background .15s; color: var(--muted);
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: #1b2430; color: var(--ink); }
+  .drop input { display: none; }
+  .thumb { margin-top: 12px; display: none; }
+  .thumb.show { display: block; }
+  .thumb img { max-width: 100%; max-height: 200px; background:
+      repeating-conic-gradient(#2a323c 0 25%, #222932 0 50%) 0 0 / 20px 20px;
+    border: 1px solid var(--line); border-radius: 8px; }
+  .thumb .name { color: var(--muted); font-size: 12px; margin-top: 6px; word-break: break-all; }
+  .params { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+  label { display: block; }
+  label .lab { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  input[type=number], select {
+    width: 100%; background: #0e1319; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 10px; font: inherit;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .row input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
+  .actions { margin-top: 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  button.go {
+    background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 9px;
+    padding: 11px 22px; font: 600 15px/1 inherit; cursor: pointer;
+  }
+  button.go:disabled { opacity: .5; cursor: default; }
+  .status { color: var(--muted); }
+  .status.ok { color: var(--ok); } .status.err { color: var(--err); }
+  .results { margin-top: 24px; display: none; }
+  .results.show { display: block; }
+  .sheets { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .sheets { grid-template-columns: 1fr; } }
+  .sheet { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .sheet h3 { margin: 0 0 4px; font-size: 14px; }
+  .sheet p { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+  .sheet img { width: 100%; background: #fff; border-radius: 8px; border: 1px solid var(--line); }
+  .dl { display: flex; gap: 8px; margin-top: 12px; }
+  .dl a {
+    flex: 1; text-align: center; text-decoration: none; color: var(--ink);
+    background: #1b2430; border: 1px solid var(--line); border-radius: 8px; padding: 8px; font-size: 13px;
+  }
+  .dl a:hover { border-color: var(--accent); }
+  .foot { color: var(--muted); font-size: 12px; margin-top: 28px; }
+  code { background: #0e1319; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Sticker Packer</h1>
+  <p class="sub">Tessellate a sticker onto A4, packs by the border, prints the art, cuts on the outline. Runs entirely in your browser.</p>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>1 · Border SVG <span style="text-transform:none;color:var(--muted)">(drives packing)</span></h2>
+      <div class="drop" id="borderDrop">
+        <div>Drop or click to choose the <b>border</b> .svg</div>
+        <input type="file" id="borderFile" accept=".svg,image/svg+xml">
+      </div>
+      <div class="thumb" id="borderThumb"><img><div class="name"></div></div>
+    </div>
+
+    <div class="panel">
+      <h2>2 · Art <span style="text-transform:none;color:var(--muted)">(SVG or raster, optional)</span></h2>
+      <div class="drop" id="imageDrop">
+        <div>Drop or click to choose the <b>art</b><br><span style="font-size:12px">SVG (same viewBox) · png · jpg · bmp · gif · webp</span></div>
+        <input type="file" id="imageFile" accept=".svg,.png,.jpg,.jpeg,.bmp,.gif,.webp,image/*">
+      </div>
+      <div class="thumb" id="imageThumb"><img><div class="name"></div></div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:16px">
+    <h2>3 · Parameters</h2>
+    <div class="params">
+      <label><div class="lab">Page size</div>
+        <select id="pagesize">
+          <option value="210x297" selected>A4, 210 × 297 mm</option>
+          <option value="297x420">A3, 297 × 420 mm</option>
+          <option value="148x210">A5, 148 × 210 mm</option>
+          <option value="105x148">A6, 105 × 148 mm</option>
+          <option value="215.9x279.4">US Letter, 8.5 × 11 in</option>
+          <option value="215.9x355.6">US Legal, 8.5 × 14 in</option>
+          <option value="279.4x431.8">Tabloid, 11 × 17 in</option>
+          <option value="custom">Custom…</option>
+        </select>
+      </label>
+      <label class="row" style="margin-top:22px"><input type="checkbox" id="landscape"> <span>Landscape</span></label>
+      <label><div class="lab">Sticker width (mm, blank = SVG units)</div><input type="number" id="width" step="1" placeholder="e.g. 46"></label>
+      <label><div class="lab">Method</div>
+        <select id="method">
+          <option value="greedy" selected>greedy (fast, mixed rotation)</option>
+          <option value="lattice">lattice (grid, slower)</option>
+          <option value="both">both, keep best (slowest)</option>
+        </select>
+      </label>
+      <label><div class="lab">Rotations</div><input type="number" id="rotations" value="72" min="1" step="1"></label>
+      <label><div class="lab">Greedy attempts</div><input type="number" id="attempts" value="8" min="1" step="1"></label>
+      <label><div class="lab">Spacing between stickers (mm)</div><input type="number" id="spacing" value="1.5" step="0.1"></label>
+      <label><div class="lab">Page margin / bleed (mm)</div><input type="number" id="margin" value="5" step="0.5"></label>
+      <label><div class="lab">Max count (blank = fill page)</div><input type="number" id="maxcount" step="1" placeholder="unlimited"></label>
+      <label><div class="lab">Cut-line stroke (mm)</div><input type="number" id="stroke" value="0.1" step="0.05"></label>
+      <label class="row" style="margin-top:22px"><input type="checkbox" id="pdf" checked> <span>Also generate PDF</span></label>
+    </div>
+    <div class="params" id="customPage" style="display:none;margin-top:12px">
+      <label><div class="lab">Custom page width</div><input type="number" id="pw" step="1" value="210"></label>
+      <label><div class="lab">Custom page height</div><input type="number" id="ph" step="1" value="297"></label>
+      <label><div class="lab">Units</div>
+        <select id="pageunit"><option value="mm" selected>mm</option><option value="in">inches</option></select>
+      </label>
+    </div>
+    <div class="actions">
+      <button class="go" id="run" disabled>Pack stickers</button>
+      <span class="status" id="status">Loading engine…</span>
+    </div>
+  </div>
+
+  <div class="results" id="results">
+    <div class="sheets">
+      <div class="sheet">
+        <h3>Content sheet <span style="color:var(--muted);font-weight:400">, print this</span></h3>
+        <p>The art, tessellated and clipped to the border.</p>
+        <img id="contentImg" alt="content preview">
+        <div class="dl" id="contentDl"></div>
+      </div>
+      <div class="sheet">
+        <h3>Outline sheet <span style="color:var(--muted);font-weight:400">, cut file</span></h3>
+        <p>Border cut lines, registered with the content. Load into your cutter.</p>
+        <img id="outlineImg" alt="outline preview">
+        <div class="dl" id="outlineDl"></div>
+      </div>
+    </div>
+  </div>
+
+  <p class="foot">Everything runs locally in your browser via WebAssembly, no upload, no backend. Packing is single-threaded, so large sheets (many rotations/attempts) can take several seconds and the page will pause while it works.</p>
+</div>
+
+<script type="module">
+import init, { pack } from './sticker_packer.js';
+
+const $ = id => document.getElementById(id);
+const status = (msg, cls='') => { const s = $('status'); s.textContent = msg; s.className = 'status ' + cls; };
+
+let border = null;              // { text, url }
+let image = { bytes: new Uint8Array(0), ext: '', url: null };
+let engineReady = false;
+
+init().then(() => { engineReady = true; maybeEnable(); status('Ready.', 'ok'); })
+      .catch(e => status('Failed to load engine: ' + e, 'err'));
+
+function maybeEnable() { $('run').disabled = !(engineReady && border); }
+
+function wireDrop(dropId, inputId, onFile) {
+  const drop = $(dropId), input = $(inputId);
+  drop.addEventListener('click', () => input.click());
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => {
+    e.preventDefault(); drop.classList.remove('over');
+    if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]);
+  });
+  input.addEventListener('change', () => { if (input.files[0]) onFile(input.files[0]); });
+}
+
+function showThumb(thumbId, url, name) {
+  const t = $(thumbId); t.querySelector('img').src = url; t.querySelector('.name').textContent = name;
+  t.classList.add('show');
+}
+
+wireDrop('borderDrop', 'borderFile', async file => {
+  const text = await file.text();
+  if (border?.url) URL.revokeObjectURL(border.url);
+  border = { text, url: URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' })) };
+  showThumb('borderThumb', border.url, file.name);
+  maybeEnable();
+});
+
+wireDrop('imageDrop', 'imageFile', async file => {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  if (image.url) URL.revokeObjectURL(image.url);
+  const mime = ext === 'svg' ? 'image/svg+xml' : file.type || 'application/octet-stream';
+  image = { bytes: buf, ext, url: URL.createObjectURL(new Blob([buf], { type: mime })) };
+  showThumb('imageThumb', image.url, file.name);
+});
+
+function num(id, fallback) { const el = $(id); if (!el) return fallback; const v = parseFloat(el.value); return isNaN(v) ? fallback : v; }
+
+$('pagesize').addEventListener('change', () => {
+  $('customPage').style.display = $('pagesize').value === 'custom' ? 'grid' : 'none';
+});
+
+// Portrait page dimensions in mm (landscape is handled by the engine).
+function pageDims() {
+  const v = $('pagesize').value;
+  if (v !== 'custom') return v.split('x').map(Number);
+  let w = num('pw', 210), h = num('ph', 297);
+  if ($('pageunit').value === 'in') { w *= 25.4; h *= 25.4; }
+  return [w, h];
+}
+
+function makeDownload(container, filename, blob) {
+  container.innerHTML = '';
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.textContent = '↓ ' + filename.split('_').pop();
+  container.appendChild(a);
+}
+
+$('run').addEventListener('click', async () => {
+  if (!border) return;
+  $('run').disabled = true;
+  status('Packing…');
+  await new Promise(r => setTimeout(r, 30)); // let the status paint before the blocking call
+  const t0 = performance.now();
+  try {
+    const wantPdf = $('pdf').checked;
+    const [pageW, pageH] = pageDims();
+    const res = pack(
+      border.text,
+      image.bytes,
+      image.ext,
+      num('width', 0) || 0,
+      pageW,
+      pageH,
+      num('margin', 5),
+      num('spacing', 1.5),
+      $('method').value,
+      Math.max(1, Math.round(num('rotations', 72))),
+      $('landscape').checked,
+      $('maxcount').value === '' ? -1 : Math.round(num('maxcount', -1)),
+      num('simplify', 0.4) || 0.4,
+      Math.max(1, Math.round(num('attempts', 8))),
+      num('stroke', 0.1),
+      wantPdf,
+    );
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    status(`Packed ${res.count} stickers in ${secs}s.`, 'ok');
+
+    const contentBlob = new Blob([res.content_svg], { type: 'image/svg+xml' });
+    const outlineBlob = new Blob([res.outline_svg], { type: 'image/svg+xml' });
+    $('contentImg').src = URL.createObjectURL(contentBlob);
+    $('outlineImg').src = URL.createObjectURL(outlineBlob);
+
+    makeDownload($('contentDl'), 'stickers_content.svg', contentBlob);
+    makeDownload($('outlineDl'), 'stickers_outline.svg', outlineBlob);
+    if (wantPdf) {
+      const c = document.createElement('a');
+      const cu = URL.createObjectURL(new Blob([res.content_pdf], { type: 'application/pdf' }));
+      c.href = cu; c.download = 'stickers_content.pdf'; c.textContent = '↓ content.pdf'; $('contentDl').appendChild(c);
+      const o = document.createElement('a');
+      const ou = URL.createObjectURL(new Blob([res.outline_pdf], { type: 'application/pdf' }));
+      o.href = ou; o.download = 'stickers_outline.pdf'; o.textContent = '↓ outline.pdf'; $('outlineDl').appendChild(o);
+    }
+    $('results').classList.add('show');
+  } catch (e) {
+    status('Error: ' + (e.message || e), 'err');
+  }
+  $('run').disabled = false;
+});
+</script>
+</body>
+</html>
