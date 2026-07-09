@@ -33,16 +33,27 @@ jobs:
       - name: Install wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
 
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Build wasm (single-threaded, with PDF)
         run: wasm-pack build --target web --release --no-default-features --features pdf
+
+      - name: Build TypeScript frontend (bundles the wasm glue in)
+        run: |
+          cp pkg/sticker_packer.js pkg/sticker_packer.d.ts pkg/sticker_packer_bg.wasm web/
+          cd web
+          bun install --frozen-lockfile
+          bun run typecheck
+          bun run build
 
       - name: Assemble static site
         run: |
           mkdir -p site
           cp web/index.html site/index.html
+          cp web/app.js site/app.js
           cp web/worker.js site/worker.js
-          cp pkg/sticker_packer.js site/sticker_packer.js
-          cp pkg/sticker_packer_bg.wasm site/sticker_packer_bg.wasm
+          cp web/sticker_packer_bg.wasm site/sticker_packer_bg.wasm
           touch site/.nojekyll   # serve files verbatim, no Jekyll processing
 
       - name: Upload Pages artifact

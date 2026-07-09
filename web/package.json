@@ -1,0 +1,12 @@
+{
+  "name": "sticker-packer-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build ./app.ts --outdir . --target browser --format esm --minify && bun build ./worker.ts --outdir . --target browser --format esm --minify",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
