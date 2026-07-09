@@ -26,14 +26,14 @@ fn reduce_basis(mut a: Vec2, mut b: Vec2) -> (Vec2, Vec2) {
     (a, b)
 }
 
-fn admissible(k: &Multi, v1: Vec2, v2: Vec2, shells: i32) -> bool {
+fn admissible(k: &Body, v1: Vec2, v2: Vec2, shells: i32) -> bool {
     for i in -shells..=shells {
         for j in -shells..=shells {
             if i == 0 && j == 0 {
                 continue;
             }
             let (x, y) = (i as f64 * v1.0 + j as f64 * v2.0, i as f64 * v1.1 + j as f64 * v2.1);
-            if contains_pt(k, x, y) {
+            if k.contains(x, y) {
                 return false;
             }
         }
@@ -44,7 +44,7 @@ fn admissible(k: &Multi, v1: Vec2, v2: Vec2, shells: i32) -> bool {
 /// Given row vector v1, the tightest v2: smallest cell area over v2 that clears the whole
 /// v1-row. Candidates are K's vertices shifted by k*v1; admissible iff inside no K + k'*v1.
 /// Cells below `min_area` are physically impossible (rejects the v2-parallel-to-v1 degeneracy).
-fn best_v2(k: &Multi, k_verts: &[Coord<f64>], min_area: f64, v1: Vec2) -> Option<(Vec2, f64)> {
+fn best_v2(k: &Body, k_verts: &[Coord<f64>], min_area: f64, v1: Vec2) -> Option<(Vec2, f64)> {
     let v1len = (v1.0 * v1.0 + v1.1 * v1.1).sqrt();
     if v1len < 1e-9 {
         return None;
@@ -61,7 +61,7 @@ fn best_v2(k: &Multi, k_verts: &[Coord<f64>], min_area: f64, v1: Vec2) -> Option
             if area < min_area * (1.0 - 1e-6) {
                 continue;
             }
-            let inside = (-m..=m).any(|k2| contains_pt(k, cand.0 - k2 as f64 * v1.0, cand.1 - k2 as f64 * v1.1));
+            let inside = (-m..=m).any(|k2| k.contains(cand.0 - k2 as f64 * v1.0, cand.1 - k2 as f64 * v1.1));
             if !inside && best.map_or(true, |(_, ba)| area < ba) {
                 best = Some((cand, area));
             }
@@ -73,6 +73,7 @@ fn best_v2(k: &Multi, k_verts: &[Coord<f64>], min_area: f64, v1: Vec2) -> Option
 /// Densest admissible lattice for collision body K (min cell area). Seeded with the
 /// bounding-box grid so a result always exists. K may be multipart (cluster bodies).
 fn densest_lattice(k: &Multi, part_area: f64, n: usize) -> (Vec2, Vec2) {
+    let body = Body::new(k);
     let main = largest(k);
     let (_, _, w, h) = poly_bbox(&main);
     let k_verts: Vec<Coord<f64>> = {
@@ -84,7 +85,7 @@ fn densest_lattice(k: &Multi, part_area: f64, n: usize) -> (Vec2, Vec2) {
 
     let v1s = sample_boundary(main.exterior(), n);
     let results: Vec<(Vec2, Vec2, f64)> =
-        par::map_slice(&v1s, |&v1| best_v2(k, &k_verts, part_area, v1).map(|(v2, a)| (v1, v2, a)))
+        par::map_slice(&v1s, |&v1| best_v2(&body, &k_verts, part_area, v1).map(|(v2, a)| (v1, v2, a)))
             .into_iter()
             .flatten()
             .collect();
@@ -94,7 +95,7 @@ fn densest_lattice(k: &Multi, part_area: f64, n: usize) -> (Vec2, Vec2) {
             continue;
         }
         let (rv1, rv2) = reduce_basis(v1, v2);
-        if admissible(k, rv1, rv2, 3) {
+        if admissible(&body, rv1, rv2, 3) {
             best = (area, rv1, rv2);
         }
     }
@@ -104,24 +105,18 @@ fn densest_lattice(k: &Multi, part_area: f64, n: usize) -> (Vec2, Vec2) {
 /// Densest double lattice: interleave copies at orientation 0 and 180. The flipped copy just
 /// touches P when the offset t is on the boundary of P (+) P; lattice-pack the pair cluster.
 fn double_lattice(grown: &Poly, part_area: f64) -> (Vec2, Vec2, Vec2) {
-    let tp = triangulate(grown);
+    let tp = convex_pieces(grown);
     let k2 = largest(&minkowski(&tp, &tp));
     let ts = sample_boundary(k2.exterior(), 36);
 
     let results: Vec<(f64, Vec2, Vec2, Vec2)> = par::map_slice(&ts, |&t| {
-            let neg = neg_tris(&tp);
-            let cluster: Vec<Tri> = tp
+            let neg = neg_pieces(&tp);
+            let cluster: Vec<Piece> = tp
                 .iter()
                 .cloned()
-                .chain(neg.iter().map(|tr| {
-                    [
-                        Coord { x: tr[0].x + t.0, y: tr[0].y + t.1 },
-                        Coord { x: tr[1].x + t.0, y: tr[1].y + t.1 },
-                        Coord { x: tr[2].x + t.0, y: tr[2].y + t.1 },
-                    ]
-                }))
+                .chain(neg.iter().map(|pc| pc.iter().map(|c| Coord { x: c.x + t.0, y: c.y + t.1 }).collect()))
                 .collect();
-            let kc = minkowski(&cluster, &neg_tris(&cluster));
+            let kc = minkowski(&cluster, &neg_pieces(&cluster));
             let (v1, v2) = densest_lattice(&kc, 2.0 * part_area, 72);
             (det(v1, v2).abs(), v1, v2, t)
         });

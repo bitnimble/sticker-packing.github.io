@@ -51,7 +51,8 @@ pub fn translate_m(m: &Multi, dx: f64, dy: f64) -> Multi {
 
 // --- triangulation & Minkowski --------------------------------------------
 
-pub type Tri = [Coord<f64>; 3];
+/// A convex polygon piece (CCW vertices) -- the unit operand of the Minkowski sum.
+pub type Piece = Vec<Coord<f64>>;
 
 fn push_ring(data: &mut Vec<f64>, ls: &LineString<f64>) {
     let cs = &ls.0;
@@ -62,7 +63,53 @@ fn push_ring(data: &mut Vec<f64>, ls: &LineString<f64>) {
     }
 }
 
-pub fn triangulate(poly: &Poly) -> Vec<Tri> {
+fn face_signed_area(verts: &[Coord<f64>], face: &[usize]) -> f64 {
+    let n = face.len();
+    (0..n).map(|i| {
+        let (p, q) = (verts[face[i]], verts[face[(i + 1) % n]]);
+        p.x * q.y - q.x * p.y
+    }).sum::<f64>() * 0.5
+}
+
+fn is_convex(verts: &[Coord<f64>], face: &[usize]) -> bool {
+    let n = face.len();
+    n >= 3 && (0..n).all(|i| {
+        let (a, b, c) = (verts[face[i]], verts[face[(i + 1) % n]], verts[face[(i + 2) % n]]);
+        (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x) >= -1e-9 // CCW: no right turns
+    })
+}
+
+/// Merge two CCW faces sharing an edge into one face, iff the result stays convex.
+fn try_merge(verts: &[Coord<f64>], fi: &[usize], fj: &[usize]) -> Option<Vec<usize>> {
+    let (ni, nj) = (fi.len(), fj.len());
+    for a in 0..ni {
+        let (u, v) = (fi[a], fi[(a + 1) % ni]);
+        for b in 0..nj {
+            if fj[b] == v && fj[(b + 1) % nj] == u {
+                // new boundary: fi from v around to u, then fj's interior (excluding u, v)
+                let mut merged = Vec::with_capacity(ni + nj - 2);
+                let mut k = (a + 1) % ni;
+                loop {
+                    merged.push(fi[k]);
+                    if k == a { break; }
+                    k = (k + 1) % ni;
+                }
+                let mut k = (b + 2) % nj;
+                while k != b {
+                    merged.push(fj[k]);
+                    k = (k + 1) % nj;
+                }
+                return is_convex(verts, &merged).then_some(merged);
+            }
+        }
+    }
+    None
+}
+
+/// Earcut triangulation merged into a small set of convex polygons (Hertel-Mehlhorn). Identical
+/// geometry to the triangulation, but far fewer pieces -- and the Minkowski sum is O(pieces_a *
+/// pieces_b), so this is the biggest lever on packing precompute time.
+pub fn convex_pieces(poly: &Poly) -> Vec<Piece> {
     let mut data: Vec<f64> = Vec::new();
     let mut holes: Vec<usize> = Vec::new();
     push_ring(&mut data, poly.exterior());
@@ -74,22 +121,38 @@ pub fn triangulate(poly: &Poly) -> Vec<Tri> {
         Ok(v) => v,
         Err(_) => return vec![],
     };
-    idx.chunks_exact(3)
+    let verts: Vec<Coord<f64>> = (0..data.len() / 2).map(|k| coord! {x: data[2 * k], y: data[2 * k + 1]}).collect();
+    let mut faces: Vec<Vec<usize>> = idx
+        .chunks_exact(3)
         .map(|t| {
-            let g = |k: usize| coord! {x: data[2 * k], y: data[2 * k + 1]};
-            [g(t[0]), g(t[1]), g(t[2])]
+            let mut f = t.to_vec();
+            if face_signed_area(&verts, &f) < 0.0 {
+                f.reverse();
+            }
+            f
         })
-        .collect()
+        .collect();
+    loop {
+        let mut did_merge = false;
+        'outer: for i in 0..faces.len() {
+            for j in (i + 1)..faces.len() {
+                if let Some(m) = try_merge(&verts, &faces[i], &faces[j]) {
+                    faces[i] = m;
+                    faces.remove(j);
+                    did_merge = true;
+                    break 'outer;
+                }
+            }
+        }
+        if !did_merge {
+            break;
+        }
+    }
+    faces.into_iter().map(|f| f.into_iter().map(|k| verts[k]).collect()).collect()
 }
 
-pub fn neg_tris(tris: &[Tri]) -> Vec<Tri> {
-    tris.iter()
-        .map(|t| [
-            coord! {x: -t[0].x, y: -t[0].y},
-            coord! {x: -t[1].x, y: -t[1].y},
-            coord! {x: -t[2].x, y: -t[2].y},
-        ])
-        .collect()
+pub fn neg_pieces(pieces: &[Piece]) -> Vec<Piece> {
+    pieces.iter().map(|p| p.iter().map(|c| coord! {x: -c.x, y: -c.y}).collect()).collect()
 }
 
 /// Union of many polygons via divide-and-conquer (only geo pairwise union needed).
@@ -113,20 +176,20 @@ pub fn union_all(mut polys: Vec<Multi>) -> Multi {
 
 /// Exact Minkowski sum A (+) B from triangulations: each triangle-pair contributes the convex
 /// hull of the 9 vertex sums; union them all. Handles concave A and B.
-pub fn minkowski(tris_a: &[Tri], tris_b: &[Tri]) -> Multi {
-    let mut pieces: Vec<Multi> = Vec::with_capacity(tris_a.len() * tris_b.len());
-    for ta in tris_a {
-        for tb in tris_b {
-            let mut pts = Vec::with_capacity(9);
-            for a in ta {
-                for b in tb {
+pub fn minkowski(pieces_a: &[Piece], pieces_b: &[Piece]) -> Multi {
+    let mut hulls: Vec<Multi> = Vec::with_capacity(pieces_a.len() * pieces_b.len());
+    for pa in pieces_a {
+        for pb in pieces_b {
+            let mut pts = Vec::with_capacity(pa.len() * pb.len());
+            for a in pa {
+                for b in pb {
                     pts.push(Point::new(a.x + b.x, a.y + b.y));
                 }
             }
-            pieces.push(MultiPolygon::new(vec![MultiPoint::new(pts).convex_hull()]));
+            hulls.push(MultiPolygon::new(vec![MultiPoint::new(pts).convex_hull()]));
         }
     }
-    union_all(pieces)
+    union_all(hulls)
 }
 
 fn disk(r: f64, nseg: usize) -> Poly {
@@ -142,21 +205,47 @@ fn disk(r: f64, nseg: usize) -> Poly {
 /// Round-join outward buffer as a Minkowski sum with a disk polygon (reuses the NFP path,
 /// avoiding a separate offset library).
 pub fn buffer(poly: &Poly, r: f64, nseg: usize) -> Poly {
-    let m = minkowski(&triangulate(poly), &triangulate(&disk(r, nseg)));
+    let m = minkowski(&convex_pieces(poly), &convex_pieces(&disk(r, nseg)));
     largest(&m)
 }
 
 /// Collision body K = P (+) (-P): two copies overlap iff their offset is in K's interior.
 pub fn collision_body(p: &Poly) -> Multi {
-    let t = triangulate(p);
-    let nt = neg_tris(&t);
+    let t = convex_pieces(p);
+    let nt = neg_pieces(&t);
     minkowski(&t, &nt)
 }
 
 // --- queries --------------------------------------------------------------
 
-pub fn contains_pt(m: &Multi, x: f64, y: f64) -> bool {
-    m.contains(&Point::new(x, y))
+type Bbox = (f64, f64, f64, f64);
+
+/// A Multi with cached bounding boxes for fast point-containment. The lattice search runs tens
+/// of millions of contains queries; a bbox reject skips geo's full ray-cast for the majority
+/// that fall outside the body (or a given part), for identical results.
+pub struct Body {
+    parts: Vec<(Poly, Bbox)>,
+    bbox: Bbox,
+}
+
+impl Body {
+    pub fn new(m: &Multi) -> Body {
+        let parts: Vec<(Poly, Bbox)> = m.0.iter().map(|p| (p.clone(), poly_bbox(p))).collect();
+        let bbox = parts.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |acc, (_, b)| {
+            (acc.0.min(b.0), acc.1.min(b.1), acc.2.max(b.2), acc.3.max(b.3))
+        });
+        Body { parts, bbox }
+    }
+
+    pub fn contains(&self, x: f64, y: f64) -> bool {
+        if x < self.bbox.0 || x > self.bbox.2 || y < self.bbox.1 || y > self.bbox.3 {
+            return false;
+        }
+        let pt = Point::new(x, y);
+        self.parts.iter().any(|(poly, b)| {
+            x >= b.0 && x <= b.2 && y >= b.1 && y <= b.3 && poly.contains(&pt)
+        })
+    }
 }
 
 /// Vertex of `m` minimizing `key` (the fill corner/axis order), lexicographic on the pair.

@@ -85,12 +85,7 @@ fn run(args: Args) -> Result<(), String> {
     };
 
     let t0 = Instant::now();
-    let last = std::cell::Cell::new(Instant::now());
-    let out = run_pack(&border_svg, &image_bytes, &image_ext, &params, &|stage, _| {
-        let now = Instant::now();
-        eprintln!("  {stage} (+{:.0}ms)", now.duration_since(last.get()).as_secs_f64() * 1000.0);
-        last.set(now);
-    })?;
+    let out = run_pack(&border_svg, &image_bytes, &image_ext, &params, &|stage, _| eprintln!("  {stage}..."))?;
     eprintln!("packed {} in {:.2}s", out.count, t0.elapsed().as_secs_f64());
 
     println!("outputs:");

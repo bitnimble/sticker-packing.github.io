@@ -51,11 +51,11 @@ pub fn precompute(
 ) -> Pre {
     let r = rotations.len();
     let parts: Vec<Poly> = rotations.iter().map(|&a| rotate_p(grown, a)).collect();
-    let tris: Vec<Vec<Tri>> = parts.iter().map(triangulate).collect();
-    let neg: Vec<Vec<Tri>> = tris.iter().map(|t| neg_tris(t)).collect();
+    let pieces: Vec<Vec<Piece>> = parts.iter().map(convex_pieces).collect();
+    let neg: Vec<Vec<Piece>> = pieces.iter().map(|p| neg_pieces(p)).collect();
 
     // base[m] = part[0] (+) (-part[m]); one Minkowski per rotation offset (identity below).
-    let base: Vec<Multi> = par::map_range(r, |m| minkowski(&tris[0], &neg[m]));
+    let base: Vec<Multi> = par::map_range(r, |m| minkowski(&pieces[0], &neg[m]));
 
     // nfp[i][m] = rotate(base[m], rotations[i]) -- all R*R templates, parallel over i.
     let nfp: Vec<Vec<Multi>> =
