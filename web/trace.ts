@@ -169,14 +169,25 @@ function distField(mask: Uint8Array, w: number, h: number, src: number): Float32
 
 // Morphological closing (dilate by r, erode by r): fills concave dents narrower than 2r with
 // smooth outward arcs. Only ever grows (unioned with the original), so the outline never comes in.
+// Runs on a background-padded buffer so out-of-canvas counts as background: without the pad, the
+// dilation grows toward each canvas edge and the erosion (whose distance-to-background is unbounded
+// past the edge) can't eat it back, leaving cardinal-direction spikes wherever the shape sits near
+// an edge.
 function close(mask: Uint8Array, w: number, h: number, r: number): Uint8Array {
   if (r < 1) return mask;
-  const dOn = distField(mask, w, h, 1);
-  const dil = new Uint8Array(w * h);
-  for (let i = 0; i < w * h; i++) dil[i] = dOn[i] <= r ? 1 : 0;
-  const dOff = distField(dil, w, h, 0);
+  const p = Math.ceil(r) + 2;
+  const pw = w + 2 * p, ph = h + 2 * p;
+  const pad = new Uint8Array(pw * ph);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (mask[y * w + x]) pad[(y + p) * pw + (x + p)] = 1;
+  const dOn = distField(pad, pw, ph, 1);
+  const dil = new Uint8Array(pw * ph);
+  for (let i = 0; i < pw * ph; i++) dil[i] = dOn[i] <= r ? 1 : 0;
+  const dOff = distField(dil, pw, ph, 0);
   const out = new Uint8Array(w * h);
-  for (let i = 0; i < w * h; i++) out[i] = mask[i] || dOff[i] >= r ? 1 : 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    out[i] = mask[i] || dOff[(y + p) * pw + (x + p)] >= r ? 1 : 0;
+  }
   return out;
 }
 
