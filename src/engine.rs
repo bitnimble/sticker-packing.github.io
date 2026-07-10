@@ -21,7 +21,10 @@ pub struct Params {
     pub pdf_background: bool,
     /// Reserve keep-out zones for Silhouette-style registration marks (inputs in inches).
     pub reg_marks: bool,
+    /// Also draw the Cameo marks into the content sheet.
+    pub reg_draw: bool,
     pub reg_length_in: f64,
+    pub reg_thickness_in: f64,
     pub reg_inset_l_in: f64,
     pub reg_inset_t_in: f64,
     pub reg_inset_r_in: f64,
@@ -46,11 +49,13 @@ impl Default for Params {
             want_pdf: true,
             pdf_background: true,
             reg_marks: false,
-            reg_length_in: 0.787,
-            reg_inset_l_in: 0.625,
-            reg_inset_t_in: 0.625,
-            reg_inset_r_in: 0.625,
-            reg_inset_b_in: 0.625,
+            reg_draw: false,
+            reg_length_in: 0.4,
+            reg_thickness_in: 0.02,
+            reg_inset_l_in: 0.4,
+            reg_inset_t_in: 0.4,
+            reg_inset_r_in: 0.4,
+            reg_inset_b_in: 0.4,
         }
     }
 }
@@ -316,7 +321,15 @@ pub fn run_pack(
     let placements = if reserve_symmetric(&reserve) { orient_upright(placements, pw, ph) } else { placements };
 
     progress("Content sheet", 0.82);
-    let content_svg = build_content_svg(border_svg, image_bytes, image_ext, &outline, &vb, &norm_mat, &placements, pw, ph)?;
+    let mut content_svg = build_content_svg(border_svg, image_bytes, image_ext, &outline, &vb, &norm_mat, &placements, pw, ph)?;
+    if p.reg_marks && p.reg_draw {
+        const IN: f64 = 25.4;
+        let marks = output::registration_marks(
+            pw, ph, p.reg_length_in * IN, p.reg_thickness_in * IN,
+            p.reg_inset_l_in * IN, p.reg_inset_t_in * IN, p.reg_inset_r_in * IN, p.reg_inset_b_in * IN,
+        );
+        content_svg = content_svg.replace("</svg>", &format!("{marks}</svg>"));
+    }
     progress("Outline sheet", 0.86);
     // Cut file from the ORIGINAL border geometry (curves preserved), not the flattened packing
     // polygon; fall back to the polygon if the SVG has no extractable path.
@@ -355,7 +368,7 @@ mod tests {
         let p = Params { reg_marks: true, margin: 5.0, ..Default::default() };
         let (pw, ph) = (210.0, 297.0);
         let r = build_reserve(&p, pw, ph);
-        let inset = 0.625 * 25.4;
+        let inset = 0.4 * 25.4;
         // border: content inside the cut-border line (inset dominates the 5mm page margin)
         for side in [r.left, r.top, r.right, r.bottom] {
             assert!((side - inset).abs() < 1e-9, "border side {side} != inset {inset}");

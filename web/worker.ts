@@ -21,7 +21,8 @@ ctx.onmessage = async (e: MessageEvent<WorkerIn>) => {
       a.border, a.imageBytes, a.imageExt, a.width, a.pageW, a.pageH,
       a.margin, a.spacing, a.method, a.rotations, a.maxCount, a.simplify,
       a.attempts, a.stroke, a.wantPdf, a.pdfBackground,
-      a.regMarks, a.regLengthIn, a.regInsetLIn, a.regInsetTIn, a.regInsetRIn, a.regInsetBIn,
+      a.regMarks, a.regDraw, a.regLengthIn, a.regThicknessIn,
+      a.regInsetLIn, a.regInsetTIn, a.regInsetRIn, a.regInsetBIn,
       onProgress,
     );
     const out: WorkerOut = {

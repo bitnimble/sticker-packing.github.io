@@ -353,7 +353,7 @@ $('run').addEventListener('click', async () => {
   try {
     const wantPdf = $<HTMLInputElement>('pdf').checked;
     const [pageW, pageH] = pageDims();
-    const regInset = num('regInset', 0.625);
+    const regInset = num('regInset', 0.4);
     const args: PackArgs = {
       border: border.text,
       imageBytes: image.bytes,
@@ -372,7 +372,9 @@ $('run').addEventListener('click', async () => {
       wantPdf,
       pdfBackground: $<HTMLInputElement>('pdfBg').checked,
       regMarks: $<HTMLInputElement>('regMarks').checked,
-      regLengthIn: num('regLength', 0.787),
+      regDraw: $<HTMLInputElement>('regDraw').checked,
+      regLengthIn: num('regLength', 0.4),
+      regThicknessIn: num('regThickness', 0.02),
       // per-side fields (advanced) are blank by default and inherit the single Inset value
       regInsetLIn: num('regInsetL', regInset),
       regInsetTIn: num('regInsetT', regInset),

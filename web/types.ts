@@ -18,7 +18,9 @@ export interface PackArgs {
   wantPdf: boolean;
   pdfBackground: boolean;
   regMarks: boolean;
+  regDraw: boolean;
   regLengthIn: number;
+  regThicknessIn: number;
   regInsetLIn: number;
   regInsetTIn: number;
   regInsetRIn: number;

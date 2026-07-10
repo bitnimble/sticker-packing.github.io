@@ -48,9 +48,13 @@ struct Args {
     svg_only: bool,
     #[arg(long = "reg-marks")]
     reg_marks: bool,
-    #[arg(long = "reg-length", default_value_t = 0.787)]
+    #[arg(long = "reg-draw")]
+    reg_draw: bool,
+    #[arg(long = "reg-length", default_value_t = 0.4)]
     reg_length: f64,
-    #[arg(long = "reg-inset", default_value_t = 0.625)]
+    #[arg(long = "reg-thickness", default_value_t = 0.02)]
+    reg_thickness: f64,
+    #[arg(long = "reg-inset", default_value_t = 0.4)]
     reg_inset: f64,
 }
 
@@ -89,7 +93,9 @@ fn run(args: Args) -> Result<(), String> {
         stroke: args.stroke,
         want_pdf: !args.svg_only,
         reg_marks: args.reg_marks,
+        reg_draw: args.reg_draw,
         reg_length_in: args.reg_length,
+        reg_thickness_in: args.reg_thickness,
         reg_inset_l_in: args.reg_inset,
         reg_inset_t_in: args.reg_inset,
         reg_inset_r_in: args.reg_inset,

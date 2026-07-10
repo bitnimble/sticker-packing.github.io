@@ -9,6 +9,31 @@ fn header(pw: f64, ph: f64) -> String {
     )
 }
 
+/// The three Silhouette Cameo print-and-cut registration marks, in page mm (viewBox coords),
+/// matching a real Silhouette export: a solid top-left square, and L-brackets top-right and
+/// bottom-left. Each side's corner centreline sits `inset` from the page edge; the L arms are
+/// `len` long and `thick` wide (butt caps + miter join put the outer corner at inset - thick/2);
+/// the square is a fixed 5 mm expanded by the mark thickness (verified from a Silhouette PDF).
+pub fn registration_marks(pw: f64, ph: f64, len: f64, thick: f64, il: f64, it: f64, ir: f64, ib: f64) -> String {
+    let sq = 5.0 + thick;
+    let square = format!(
+        "<rect x=\"{:.4}\" y=\"{:.4}\" width=\"{sq:.4}\" height=\"{sq:.4}\" fill=\"#000000\"/>",
+        il - thick / 2.0,
+        it - thick / 2.0
+    );
+    let bracket = | hx: f64, hy: f64, cx: f64, cy: f64, vx: f64, vy: f64| {
+        format!(
+            "<path d=\"M{hx:.4},{hy:.4} L{cx:.4},{cy:.4} L{vx:.4},{vy:.4}\" fill=\"none\" \
+             stroke=\"#000000\" stroke-width=\"{thick:.4}\" stroke-linecap=\"butt\" stroke-linejoin=\"miter\"/>"
+        )
+    };
+    // top-right: corner (pw-ir, it), arms toward the interior (left, down)
+    let tr = bracket(pw - ir - len, it, pw - ir, it, pw - ir, it + len);
+    // bottom-left: corner (il, ph-ib), arms toward the interior (right, up)
+    let bl = bracket(il + len, ph - ib, il, ph - ib, il, ph - ib - len);
+    format!("{square}{tr}{bl}")
+}
+
 /// SVG `matrix(a b c d e f)` string from our (a,b,c,d,e,f) with x'=a*x+b*y+c: SVG orders it
 /// column-major, so a,b = first column, etc.
 fn svg_matrix(m: &Mat) -> String {
