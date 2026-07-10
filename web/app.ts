@@ -65,6 +65,23 @@ function maybeEnable(): void {
 // already-decoded blob URL -- <img>-hosted SVG runs in secure static mode and blocks external
 // refs, forcing a slow base64 embed + re-decode instead.
 const ART_HREF = '__ART_HREF__';
+// Overlay the outline as a visible stroke on the clipped art (preview only): a thin dark cut line
+// over transparent art can be invisible, so let the user recolour/thicken it. non-scaling-stroke
+// keeps the width constant in screen px regardless of the art's viewBox scale.
+function withOutlineStroke(svg: string): string {
+  const d = svg.match(/<clipPath[^>]*>\s*<path d="([^"]*)"/)?.[1];
+  if (!d) return svg;
+  const color = $<HTMLInputElement>('previewOutlineColor').value;
+  const w = $<HTMLInputElement>('previewOutlineWidth').value;
+  const path = `<path id="previewStroke" d="${d}" fill="none" stroke="${color}" stroke-width="${w}" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+  return svg.replace('</svg>', path + '</svg>');
+}
+function updateOutlineStroke(): void {
+  const p = document.getElementById('previewStroke');
+  if (!p) return;
+  p.setAttribute('stroke', $<HTMLInputElement>('previewOutlineColor').value);
+  p.setAttribute('stroke-width', $<HTMLInputElement>('previewOutlineWidth').value);
+}
 function updatePreview(): void {
   if (!previewReady || !border) { $('previewPanel').style.display = 'none'; return; }
   const err = $('previewErr');
@@ -72,7 +89,7 @@ function updatePreview(): void {
   try {
     let svg = preview(border.text, image.bytes, image.ext);
     if (image.url) svg = svg.replace(ART_HREF, image.url);
-    box.innerHTML = svg;
+    box.innerHTML = withOutlineStroke(svg);
     box.style.display = '';
     err.style.display = 'none';
   } catch (e: unknown) {
@@ -83,6 +100,8 @@ function updatePreview(): void {
   }
   $('previewPanel').style.display = 'block';
 }
+$('previewOutlineColor').addEventListener('input', updateOutlineStroke);
+$('previewOutlineWidth').addEventListener('input', updateOutlineStroke);
 
 // --- file inputs: preview replaces the drop zone -------------------------
 function wireDrop(dropId: string, inputId: string, onFile: (f: File) => void): void {
