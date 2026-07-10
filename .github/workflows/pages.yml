@@ -48,14 +48,9 @@ jobs:
           bun run build
 
       - name: Assemble static site
-        run: |
-          mkdir -p site
-          cp web/index.html site/index.html
-          cp web/favicon.svg site/favicon.svg
-          cp web/app.js site/app.js
-          cp web/worker.js site/worker.js
-          cp web/sticker_packer_bg.wasm site/sticker_packer_bg.wasm
-          touch site/.nojekyll   # serve files verbatim, no Jekyll processing
+        # Content-hash app.js / worker.js / *.wasm and rewrite their references, so each deploy has
+        # fresh URLs and the CDN can't serve a stale engine. index.html keeps its stable name.
+        run: bun web/hash-assets.mjs web site
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
