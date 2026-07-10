@@ -518,6 +518,17 @@ pub fn simplify_poly(p: &Poly, eps: f64) -> Poly {
 /// A 2x3 affine as (a,b,c,d,e,f): x' = a*x + b*y + c, y' = d*x + e*y + f.
 pub type Mat = [f64; 6];
 
+/// One outline path segment (curves preserved). The cut outline is extracted from the border SVG
+/// as these, then baked per placement into absolute coordinates -- svg2pdf draws a path in local
+/// coords under a `cm` transform, and Silhouette re-segments curves that sit under such a transform.
+pub enum Seg {
+    M([f64; 2]),
+    L([f64; 2]),
+    Q([f64; 2], [f64; 2]),
+    C([f64; 2], [f64; 2], [f64; 2]),
+    Z,
+}
+
 /// Compose: (p ∘ q)(v) = p(q(v)), apply q first, then p.
 pub fn mat_compose(p: &Mat, q: &Mat) -> Mat {
     [

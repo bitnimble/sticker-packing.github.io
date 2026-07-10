@@ -320,8 +320,8 @@ pub fn run_pack(
     progress("Outline sheet", 0.86);
     // Cut file from the ORIGINAL border geometry (curves preserved), not the flattened packing
     // polygon; fall back to the polygon if the SVG has no extractable path.
-    let cut_d = svgio::outline_path_d(border_svg, &norm_mat).unwrap_or_else(|_| output::poly_d(&norm));
-    let outline_svg = output::outline_svg(&cut_d, &placements, pw, ph, p.stroke);
+    let segs = svgio::outline_path_segs(border_svg, &norm_mat).unwrap_or_else(|_| output::poly_segs(&norm));
+    let outline_svg = output::outline_svg(&segs, &placements, pw, ph, p.stroke);
     let (content_pdf, outline_pdf) = if p.want_pdf {
         progress("Rendering PDF", 0.9);
         if p.pdf_background {

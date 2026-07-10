@@ -141,57 +141,48 @@ pub fn load_outline_str(svg: &str) -> Result<Poly, String> {
     Ok(largest(&union_all(polys)))
 }
 
-/// The border outline as an SVG path `d` with curves preserved, in the coordinate frame produced by
-/// applying `post` to viewBox units. Used for the CUT file so a bezier outline stays a smooth
-/// bezier rather than being flattened into thousands of line nodes like the packing polygon.
-pub fn outline_path_d(svg: &str, post: &Mat) -> Result<String, String> {
+/// The border outline as path segments (curves preserved), in the coordinate frame produced by
+/// applying `post` to viewBox units. The CUT file bakes each placement transform into these, so a
+/// bezier outline stays a smooth bezier instead of being flattened like the packing polygon.
+pub fn outline_path_segs(svg: &str, post: &Mat) -> Result<Vec<Seg>, String> {
     let tree = usvg::Tree::from_data(svg.as_bytes(), &usvg::Options::default())
         .map_err(|e| format!("parse SVG: {e}"))?;
     let vb = read_viewbox_str(svg)?;
     let scale = tree.size().width() as f64 / vb[2];
-    let mut d = String::new();
-    emit_group(tree.root(), &mut d, scale, &vb, post);
-    if d.is_empty() {
+    let mut segs = Vec::new();
+    seg_group(tree.root(), &mut segs, scale, &vb, post);
+    if segs.is_empty() {
         return Err("no path geometry in border SVG".into());
     }
-    Ok(d)
+    Ok(segs)
 }
 
-fn emit_group(group: &usvg::Group, d: &mut String, scale: f64, vb: &[f64; 4], post: &Mat) {
+fn seg_group(group: &usvg::Group, segs: &mut Vec<Seg>, scale: f64, vb: &[f64; 4], post: &Mat) {
     for node in group.children() {
         match node {
-            Node::Group(g) => emit_group(g, d, scale, vb, post),
-            Node::Path(p) => emit_path(p, d, scale, vb, post),
+            Node::Group(g) => seg_group(g, segs, scale, vb, post),
+            Node::Path(p) => seg_path(p, segs, scale, vb, post),
             _ => {}
         }
     }
 }
 
-fn emit_path(path: &usvg::Path, d: &mut String, scale: f64, vb: &[f64; 4], post: &Mat) {
+fn seg_path(path: &usvg::Path, segs: &mut Vec<Seg>, scale: f64, vb: &[f64; 4], post: &Mat) {
     let t = path.abs_transform();
     // absolute (path transform) -> viewBox units -> post (the packing normalisation). Affine, so
     // bezier control points map correctly and the curve is preserved.
-    let m = |x: f32, y: f32| -> (f64, f64) {
+    let m = |x: f32, y: f32| -> [f64; 2] {
         let (ax, ay) = ((t.sx * x + t.kx * y + t.tx) as f64, (t.ky * x + t.sy * y + t.ty) as f64);
         let (vx, vy) = (ax / scale + vb[0], ay / scale + vb[1]);
-        (post[0] * vx + post[1] * vy + post[2], post[3] * vx + post[4] * vy + post[5])
+        [post[0] * vx + post[1] * vy + post[2], post[3] * vx + post[4] * vy + post[5]]
     };
     for seg in path.data().segments() {
         match seg {
-            PathSegment::MoveTo(p) => { let (x, y) = m(p.x, p.y); d.push_str(&format!("M{x:.3},{y:.3}")); }
-            PathSegment::LineTo(p) => { let (x, y) = m(p.x, p.y); d.push_str(&format!("L{x:.3},{y:.3}")); }
-            PathSegment::QuadTo(a, b) => {
-                let (ax, ay) = m(a.x, a.y);
-                let (bx, by) = m(b.x, b.y);
-                d.push_str(&format!("Q{ax:.3},{ay:.3} {bx:.3},{by:.3}"));
-            }
-            PathSegment::CubicTo(a, b, c) => {
-                let (ax, ay) = m(a.x, a.y);
-                let (bx, by) = m(b.x, b.y);
-                let (cx, cy) = m(c.x, c.y);
-                d.push_str(&format!("C{ax:.3},{ay:.3} {bx:.3},{by:.3} {cx:.3},{cy:.3}"));
-            }
-            PathSegment::Close => d.push('Z'),
+            PathSegment::MoveTo(p) => segs.push(Seg::M(m(p.x, p.y))),
+            PathSegment::LineTo(p) => segs.push(Seg::L(m(p.x, p.y))),
+            PathSegment::QuadTo(a, b) => segs.push(Seg::Q(m(a.x, a.y), m(b.x, b.y))),
+            PathSegment::CubicTo(a, b, c) => segs.push(Seg::C(m(a.x, a.y), m(b.x, b.y), m(c.x, c.y))),
+            PathSegment::Close => segs.push(Seg::Z),
         }
     }
 }

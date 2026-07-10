@@ -73,23 +73,58 @@ pub fn content_svg_baked(href: &str, vb: &[f64; 4], norm: &Mat, placements: &[Pl
     s
 }
 
-/// Outline sheet (cut file): the un-grown border outline at the same placements, as unfilled
-/// stroked cut lines. `cut_d` is the border path `d` in normalized (packing-space) coordinates --
-/// curves preserved, so a bezier outline cuts as a smooth curve, not a flattened polygon.
-pub fn outline_svg(cut_d: &str, placements: &[Placement], pw: f64, ph: f64, stroke: f64) -> String {
+/// Outline sheet (cut file): the un-grown border outline (`segs`, in normalized packing-space
+/// coordinates) at each placement. The placement transform is baked into absolute path coordinates
+/// per sticker rather than emitted as a `<use transform>` -- svg2pdf would otherwise draw the path
+/// in local coords under a `cm`, and Silhouette re-segments curves that sit under such a transform.
+/// Curves are preserved, so a bezier outline cuts as a smooth curve.
+pub fn outline_svg(segs: &[Seg], placements: &[Placement], pw: f64, ph: f64, stroke: f64) -> String {
     let mut s = header(pw, ph);
-    // Define the cut path ONCE (place_mat is rigid, so stroke width stays uniform) and <use> it
-    // per placement -- otherwise the full-resolution border is re-formatted for every sticker,
-    // which dominates runtime for high-vertex outlines.
-    s.push_str(&format!("<defs><path id=\"cut\" d=\"{cut_d}\"/></defs>\n"));
     for p in placements {
         s.push_str(&format!(
-            "<use xlink:href=\"#cut\" transform=\"{}\" fill=\"none\" stroke=\"#000000\" stroke-width=\"{stroke}\"/>\n",
-            svg_matrix(&place_mat(p.angle, p.x, p.y))
+            "<path d=\"{}\" fill=\"none\" stroke=\"#000000\" stroke-width=\"{stroke}\"/>\n",
+            segs_to_d(segs, &place_mat(p.angle, p.x, p.y))
         ));
     }
     s.push_str("</svg>\n");
     s
+}
+
+/// Path `d` for `segs` with the affine `m` applied to every point (curves preserved, since an
+/// affine maps bezier control points correctly).
+fn segs_to_d(segs: &[Seg], m: &Mat) -> String {
+    let ap = |p: &[f64; 2]| (m[0] * p[0] + m[1] * p[1] + m[2], m[3] * p[0] + m[4] * p[1] + m[5]);
+    let mut d = String::new();
+    for seg in segs {
+        match seg {
+            Seg::M(p) => { let (x, y) = ap(p); d.push_str(&format!("M{x:.4},{y:.4}")); }
+            Seg::L(p) => { let (x, y) = ap(p); d.push_str(&format!("L{x:.4},{y:.4}")); }
+            Seg::Q(a, b) => {
+                let ((ax, ay), (bx, by)) = (ap(a), ap(b));
+                d.push_str(&format!("Q{ax:.4},{ay:.4} {bx:.4},{by:.4}"));
+            }
+            Seg::C(a, b, c) => {
+                let ((ax, ay), (bx, by), (cx, cy)) = (ap(a), ap(b), ap(c));
+                d.push_str(&format!("C{ax:.4},{ay:.4} {bx:.4},{by:.4} {cx:.4},{cy:.4}"));
+            }
+            Seg::Z => d.push('Z'),
+        }
+    }
+    d
+}
+
+/// Fallback outline (a flattened polygon) as `Seg`s -- used when the border SVG has no extractable
+/// path. All lines, no curves.
+pub fn poly_segs(p: &Poly) -> Vec<Seg> {
+    let mut segs = Vec::new();
+    for ring in std::iter::once(p.exterior()).chain(p.interiors()) {
+        let cs = &ring.0;
+        for (i, c) in cs[..cs.len().saturating_sub(1)].iter().enumerate() {
+            segs.push(if i == 0 { Seg::M([c.x, c.y]) } else { Seg::L([c.x, c.y]) });
+        }
+        segs.push(Seg::Z);
+    }
+    segs
 }
 
 /// Prepend a full-page white rectangle as the first (bottom) child of an output SVG. Silhouette
