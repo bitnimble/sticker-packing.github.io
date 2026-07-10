@@ -101,6 +101,36 @@ pub fn read_viewbox_str(s: &str) -> Result<[f64; 4], String> {
     }
 }
 
+/// The four numbers of a named attribute on the root `<svg>` element, or None.
+fn read_svg_attr4(s: &str, attr: &str) -> Option<[f64; 4]> {
+    let lower = s.to_ascii_lowercase();
+    let start = lower.find("<svg")?;
+    let end = s[start..].find('>').map(|i| start + i)?;
+    let tag = &s[start..end];
+    let pos = tag.to_ascii_lowercase().find(attr)?;
+    let after = tag[pos + attr.len()..].trim_start();
+    let after = after.strip_prefix('=')?.trim_start();
+    let quote = after.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    let body = &after[1..];
+    let inner = &body[..body.find(quote)?];
+    let nums: Vec<f64> = inner
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|t| !t.is_empty())
+        .filter_map(|t| t.parse().ok())
+        .collect();
+    (nums.len() == 4).then(|| [nums[0], nums[1], nums[2], nums[3]])
+}
+
+/// The region the art raster maps into. An auto-outline border enlarges its viewBox to fit the
+/// outline margin and records the original art box in `data-art`; a plain border's art fills its
+/// whole viewBox.
+pub fn read_art_region(svg: &str) -> Result<[f64; 4], String> {
+    match read_svg_attr4(svg, "data-art") {
+        Some(r) => Ok(r),
+        None => read_viewbox_str(svg),
+    }
+}
+
 /// Border and image must share a viewBox (same coordinate space) or their relative alignment
 /// is undefined. Returns the shared viewBox; errors on mismatch.
 pub fn require_same_viewbox_str(border: &str, image: &str) -> Result<[f64; 4], String> {

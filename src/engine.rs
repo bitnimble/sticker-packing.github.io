@@ -163,14 +163,19 @@ pub fn build_inner(
 /// matches a placed sticker; rasters reference PREVIEW_ART_HREF rather than embedding base64.
 pub fn preview_svg(border_svg: &str, image_bytes: &[u8], image_ext: &str) -> Result<String, String> {
     let outline = svgio::load_outline_str(border_svg)?;
-    let vb = svgio::read_viewbox_str(border_svg)?;
-    let inner = build_inner(border_svg, image_bytes, image_ext, &vb, Some(PREVIEW_ART_HREF))?;
+    let art_vb = svgio::read_art_region(border_svg)?;
+    let inner = build_inner(border_svg, image_bytes, image_ext, &art_vb, Some(PREVIEW_ART_HREF))?;
     let clip = output::poly_d(&outline);
+    // Size the canvas to the OUTLINE, not the art: an auto-outline margin can extend past the art,
+    // which would otherwise be clipped by an art-sized viewBox. Pad a little so the outline stroke
+    // isn't flush against the edge.
+    let (minx, miny, maxx, maxy) = poly_bbox(&outline);
+    let pad = (maxx - minx).max(maxy - miny) * 0.03;
+    let (vx, vy, vw, vh) = (minx - pad, miny - pad, maxx - minx + 2.0 * pad, maxy - miny + 2.0 * pad);
     Ok(format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
-         width=\"{}\" height=\"{}\" viewBox=\"{} {} {} {}\"><defs><clipPath id=\"c\" clipPathUnits=\"userSpaceOnUse\">\
-         <path d=\"{}\"/></clipPath></defs><g clip-path=\"url(#c)\">{}</g></svg>",
-        vb[2], vb[3], vb[0], vb[1], vb[2], vb[3], clip, inner
+         width=\"{vw}\" height=\"{vh}\" viewBox=\"{vx} {vy} {vw} {vh}\"><defs><clipPath id=\"c\" clipPathUnits=\"userSpaceOnUse\">\
+         <path d=\"{clip}\"/></clipPath></defs><g clip-path=\"url(#c)\">{inner}</g></svg>"
     ))
 }
 
@@ -211,9 +216,22 @@ pub fn auto_outline_svg(points: &[f64], lengths: &[u32], vb: &[f64; 4], margin: 
         .iter()
         .map(|p| format!("<path d=\"{}\" fill=\"none\" stroke=\"#000000\" stroke-width=\"{}\"/>", output::poly_d(p), stroke))
         .collect();
+    // The outline is the art dilated by the margin, so it extends past the art's viewBox. Size the
+    // canvas to the outline (bbox of all rings), and record the original art region in `data-art`
+    // so the art still lands 1:1 in its own box, not stretched to the enlarged viewBox.
+    let (mut minx, mut miny, mut maxx, mut maxy) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for p in &outline.0 {
+        let (a, b, c, d) = poly_bbox(p);
+        minx = minx.min(a);
+        miny = miny.min(b);
+        maxx = maxx.max(c);
+        maxy = maxy.max(d);
+    }
+    let (w, h) = (maxx - minx, maxy - miny);
     Ok(format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"{} {} {} {}\">{}</svg>",
-        vb[2], vb[3], vb[0], vb[1], vb[2], vb[3], paths
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"{minx} {miny} {w} {h}\" \
+         data-art=\"{} {} {} {}\">{paths}</svg>",
+        vb[0], vb[1], vb[2], vb[3]
     ))
 }
 
@@ -280,7 +298,9 @@ pub fn run_pack(
     }
     progress("Preparing", 0.05);
     let outline = svgio::load_outline_str(border_svg)?;
-    let vb = svgio::read_viewbox_str(border_svg)?;
+    // The art raster maps into its own box (which the auto-outline records separately from the
+    // enlarged border viewBox), not the border's viewBox.
+    let vb = svgio::read_art_region(border_svg)?;
     // A degenerate outline (collinear / zero-area) triangulates to nothing, which would panic in
     // buffer()/largest() and disable collision detection; reject it with a clear error instead.
     let (ominx, ominy, omaxx, omaxy) = poly_bbox(&outline);
@@ -384,6 +404,27 @@ mod tests {
         assert!(reserve_symmetric(&plain));
         let marks = build_reserve(&Params { reg_marks: true, ..Default::default() }, 210.0, 297.0);
         assert!(!reserve_symmetric(&marks));
+    }
+
+    #[test]
+    fn art_region_from_data_attr_or_viewbox() {
+        // Auto-outline: enlarged viewBox, art region carried in data-art.
+        let with = "<svg viewBox=\"-15 -15 130 130\" data-art=\"0 0 100 100\"></svg>";
+        assert_eq!(crate::svgio::read_art_region(with).unwrap(), [0.0, 0.0, 100.0, 100.0]);
+        // Plain border: art fills the viewBox.
+        let without = "<svg viewBox=\"0 0 50 60\"></svg>";
+        assert_eq!(crate::svgio::read_art_region(without).unwrap(), [0.0, 0.0, 50.0, 60.0]);
+    }
+
+    #[test]
+    fn preview_canvas_fits_outline_beyond_art() {
+        // Border viewBox is 100x100 but the outline path extends to [-10,120]; the preview canvas
+        // must be sized to the outline, not the art, or the outline goes out of view.
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\" width=\"100\" height=\"100\"><path d=\"M-10,-10 L120,-10 L120,120 L-10,120 Z\" fill=\"none\" stroke=\"#000\"/></svg>";
+        let out = preview_svg(svg, &[], "").unwrap();
+        let vb = out.split("viewBox=\"").nth(1).unwrap().split('"').next().unwrap();
+        let nums: Vec<f64> = vb.split_whitespace().map(|s| s.parse().unwrap()).collect();
+        assert!(nums[2] > 120.0, "preview width {} must include the 130-wide outline", nums[2]);
     }
 
     #[test]
