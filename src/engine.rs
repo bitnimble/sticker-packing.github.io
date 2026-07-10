@@ -56,9 +56,11 @@ impl Default for Params {
 }
 
 /// Build the page keep-out reservation for the (already landscape-swapped) page. With marks off
-/// this is just the uniform page margin; with marks on, each side clears the larger of the margin
-/// and its registration inset, and the three Cameo corner marks (solid top-left square + L-brackets
-/// top-right and bottom-left) reserve a `length x length` square each.
+/// this is just the uniform page margin. With marks on there are two no-pack zones, matching how
+/// Silhouette shows them: (1) everything outside the cut border -- each side clears the larger of
+/// the page margin and its registration inset, so content stays inside the inset rectangle; and
+/// (2) the three Cameo corner marks (solid top-left square + L-brackets top-right and bottom-left),
+/// each reserving a `length x length` square just inside that corner.
 fn build_reserve(p: &Params, pw: f64, ph: f64) -> Reserve {
     let m = p.margin;
     if !p.reg_marks {
@@ -78,6 +80,14 @@ fn build_reserve(p: &Params, pw: f64, ph: f64) -> Reserve {
         [il, ph - ib - len, il + len, ph - ib], // bottom-left bracket
     ];
     Reserve { left: m.max(il), top: m.max(it), right: m.max(ir), bottom: m.max(ib), rects }
+}
+
+/// True when the reservation maps onto itself under a 180° turn about the page centre -- the
+/// condition for `orient_upright`'s sheet flip to be safe. Registration marks (three corners, and
+/// possibly asymmetric insets) break this, so the flip must be skipped or it could turn a sticker
+/// into a mark or past a border.
+fn reserve_symmetric(r: &Reserve) -> bool {
+    r.rects.is_empty() && (r.left - r.right).abs() < 1e-9 && (r.top - r.bottom).abs() < 1e-9
 }
 
 /// Common page presets in mm (portrait). Returns None for unknown names.
@@ -270,7 +280,9 @@ pub fn run_pack(
     if placements.is_empty() {
         return Err("sticker does not fit on the page (check margin / sticker width)".into());
     }
-    let placements = orient_upright(placements, pw, ph);
+    // The upright flip turns the whole sheet 180°; only safe when the reservation is symmetric under
+    // that turn, else it could move a sticker onto a registration mark or past an asymmetric border.
+    let placements = if reserve_symmetric(&reserve) { orient_upright(placements, pw, ph) } else { placements };
 
     progress("Content sheet", 0.82);
     let content_svg = output::content_svg(&inner, &outline, &norm_mat, &placements, pw, ph);
@@ -298,4 +310,32 @@ fn pdf_of(svg: &str) -> Result<Vec<u8>, String> {
 #[cfg(not(feature = "pdf"))]
 fn pdf_of(_svg: &str) -> Result<Vec<u8>, String> {
     Err("PDF output is not available in this build".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reserve_is_inset_border_plus_corner_marks() {
+        let p = Params { reg_marks: true, margin: 5.0, ..Default::default() };
+        let (pw, ph) = (210.0, 297.0);
+        let r = build_reserve(&p, pw, ph);
+        let inset = 0.625 * 25.4;
+        // border: content inside the cut-border line (inset dominates the 5mm page margin)
+        for side in [r.left, r.top, r.right, r.bottom] {
+            assert!((side - inset).abs() < 1e-9, "border side {side} != inset {inset}");
+        }
+        // corners: three Cameo mark squares
+        assert_eq!(r.rects.len(), 3);
+    }
+
+    #[test]
+    fn upright_flip_disabled_with_marks() {
+        // Plain margins are 180°-symmetric (flip runs); registration marks are not (flip skipped).
+        let plain = build_reserve(&Params { reg_marks: false, ..Default::default() }, 210.0, 297.0);
+        assert!(reserve_symmetric(&plain));
+        let marks = build_reserve(&Params { reg_marks: true, ..Default::default() }, 210.0, 297.0);
+        assert!(!reserve_symmetric(&marks));
+    }
 }
