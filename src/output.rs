@@ -74,13 +74,14 @@ pub fn content_svg_baked(href: &str, vb: &[f64; 4], norm: &Mat, placements: &[Pl
 }
 
 /// Outline sheet (cut file): the un-grown border outline at the same placements, as unfilled
-/// stroked cut lines. `norm_border` is the normalized (packing-space) border polygon.
-pub fn outline_svg(norm_border: &Poly, placements: &[Placement], pw: f64, ph: f64, stroke: f64) -> String {
+/// stroked cut lines. `cut_d` is the border path `d` in normalized (packing-space) coordinates --
+/// curves preserved, so a bezier outline cuts as a smooth curve, not a flattened polygon.
+pub fn outline_svg(cut_d: &str, placements: &[Placement], pw: f64, ph: f64, stroke: f64) -> String {
     let mut s = header(pw, ph);
     // Define the cut path ONCE (place_mat is rigid, so stroke width stays uniform) and <use> it
     // per placement -- otherwise the full-resolution border is re-formatted for every sticker,
     // which dominates runtime for high-vertex outlines.
-    s.push_str(&format!("<defs><path id=\"cut\" d=\"{}\"/></defs>\n", poly_d(norm_border)));
+    s.push_str(&format!("<defs><path id=\"cut\" d=\"{cut_d}\"/></defs>\n"));
     for p in placements {
         s.push_str(&format!(
             "<use xlink:href=\"#cut\" transform=\"{}\" fill=\"none\" stroke=\"#000000\" stroke-width=\"{stroke}\"/>\n",
