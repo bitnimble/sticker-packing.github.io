@@ -74,6 +74,19 @@ pub fn outline_svg(norm_border: &Poly, placements: &[Placement], pw: f64, ph: f6
     s
 }
 
+/// Prepend a full-page white rectangle as the first (bottom) child of an output SVG. Silhouette
+/// imports a PDF at the bounding box of its vector content, so without a page-sized shape the
+/// content and outline PDFs import at different bounds and don't line up; a shared background makes
+/// both import at the full document size and position. The user deletes it after importing.
+pub fn add_background(svg: &str, pw: f64, ph: f64) -> String {
+    let rect = format!("<rect x=\"0\" y=\"0\" width=\"{pw}\" height=\"{ph}\" fill=\"#ffffff\"/>");
+    // The opening `<svg ...>` tag has no '>' inside its quoted attributes, so the first '>' ends it.
+    match svg.find('>') {
+        Some(i) => format!("{}{}{}", &svg[..=i], rect, &svg[i + 1..]),
+        None => svg.to_string(),
+    }
+}
+
 /// Render an SVG string to a PDF (dpi=96 so mm -> pt yields exact physical A4).
 #[cfg(feature = "pdf")]
 pub fn svg_to_pdf(svg: &str) -> Result<Vec<u8>, String> {

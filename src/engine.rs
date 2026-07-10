@@ -17,6 +17,8 @@ pub struct Params {
     pub greedy_attempts: usize,
     pub stroke: f64,
     pub want_pdf: bool,
+    /// Add a full-page white background to the PDFs so Silhouette imports them at document bounds.
+    pub pdf_background: bool,
     /// Reserve keep-out zones for Silhouette-style registration marks (inputs in inches).
     pub reg_marks: bool,
     pub reg_length_in: f64,
@@ -42,6 +44,7 @@ impl Default for Params {
             greedy_attempts: 16,
             stroke: 0.1,
             want_pdf: true,
+            pdf_background: true,
             reg_marks: false,
             reg_length_in: 0.787,
             reg_inset_l_in: 0.625,
@@ -275,7 +278,12 @@ pub fn run_pack(
     let outline_svg = output::outline_svg(&norm, &placements, pw, ph, p.stroke);
     let (content_pdf, outline_pdf) = if p.want_pdf {
         progress("Rendering PDF", 0.9);
-        (pdf_of(&content_svg)?, pdf_of(&outline_svg)?)
+        if p.pdf_background {
+            let bg = |svg: &str| output::add_background(svg, pw, ph);
+            (pdf_of(&bg(&content_svg))?, pdf_of(&bg(&outline_svg))?)
+        } else {
+            (pdf_of(&content_svg)?, pdf_of(&outline_svg)?)
+        }
     } else {
         (Vec::new(), Vec::new())
     };

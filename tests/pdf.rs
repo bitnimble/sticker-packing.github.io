@@ -28,6 +28,18 @@ fn identical_rasters_collapse_to_one_image() {
 }
 
 #[test]
+fn background_is_full_page_behind_content() {
+    use sticker_packer::output::add_background;
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"210mm\" height=\"297mm\" viewBox=\"0 0 210 297\"><path d=\"M0,0 L1,1\"/></svg>";
+    let out = add_background(svg, 210.0, 297.0);
+    let rect_at = out.find("<rect").expect("rect present");
+    let path_at = out.find("<path").expect("path present");
+    assert!(rect_at < path_at, "background must be the first (bottom) child");
+    assert!(out.contains("width=\"210\" height=\"297\"") && out.contains("fill=\"#ffffff\""));
+    assert!(svg_to_pdf(&out).is_ok(), "backgrounded svg must still convert");
+}
+
+#[test]
 fn dedup_shrinks_the_file() {
     // Ten copies must not cost ten images' worth of bytes.
     let one = svg_to_pdf(&svg_with_images(1)).unwrap().len();

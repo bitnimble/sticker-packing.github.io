@@ -16,6 +16,7 @@ export interface PackArgs {
   attempts: number;
   stroke: number;
   wantPdf: boolean;
+  pdfBackground: boolean;
   regMarks: boolean;
   regLengthIn: number;
   regInsetLIn: number;

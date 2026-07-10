@@ -319,6 +319,7 @@ $('run').addEventListener('click', async () => {
       attempts: Math.max(1, Math.round(num('attempts', 8))),
       stroke: num('stroke', 0.1),
       wantPdf,
+      pdfBackground: $<HTMLInputElement>('pdfBg').checked,
       regMarks: $<HTMLInputElement>('regMarks').checked,
       regLengthIn: num('regLength', 0.787),
       regInsetLIn: num('regInsetL', 0.625),
