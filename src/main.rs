@@ -46,6 +46,12 @@ struct Args {
     stroke: f64,
     #[arg(long = "svg-only")]
     svg_only: bool,
+    #[arg(long = "reg-marks")]
+    reg_marks: bool,
+    #[arg(long = "reg-length", default_value_t = 0.787)]
+    reg_length: f64,
+    #[arg(long = "reg-inset", default_value_t = 0.625)]
+    reg_inset: f64,
 }
 
 fn write(path: &str, bytes: &[u8]) -> Result<(), String> {
@@ -82,6 +88,12 @@ fn run(args: Args) -> Result<(), String> {
         greedy_attempts: args.greedy_attempts,
         stroke: args.stroke,
         want_pdf: !args.svg_only,
+        reg_marks: args.reg_marks,
+        reg_length_in: args.reg_length,
+        reg_inset_l_in: args.reg_inset,
+        reg_inset_t_in: args.reg_inset,
+        reg_inset_r_in: args.reg_inset,
+        reg_inset_b_in: args.reg_inset,
         ..Default::default()
     };
 
