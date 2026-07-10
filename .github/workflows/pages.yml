@@ -51,6 +51,7 @@ jobs:
         run: |
           mkdir -p site
           cp web/index.html site/index.html
+          cp web/favicon.svg site/favicon.svg
           cp web/app.js site/app.js
           cp web/worker.js site/worker.js
           cp web/sticker_packer_bg.wasm site/sticker_packer_bg.wasm
