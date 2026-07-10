@@ -57,8 +57,8 @@ impl Default for Params {
 
 /// Build the page keep-out reservation for the (already landscape-swapped) page. With marks off
 /// this is just the uniform page margin. With marks on there are two no-pack zones, matching how
-/// Silhouette shows them: (1) everything outside the cut border -- each side clears the larger of
-/// the page margin and its registration inset, so content stays inside the inset rectangle; and
+/// Silhouette shows them: (1) everything outside the cut border -- the registration inset defines
+/// that border (superseding the page margin), so content stays inside the inset rectangle; and
 /// (2) the three Cameo corner marks (solid top-left square + L-brackets top-right and bottom-left),
 /// each reserving a `length x length` square just inside that corner.
 fn build_reserve(p: &Params, pw: f64, ph: f64) -> Reserve {
@@ -79,7 +79,7 @@ fn build_reserve(p: &Params, pw: f64, ph: f64) -> Reserve {
         [pw - ir - len, it, pw - ir, it + len], // top-right bracket
         [il, ph - ib - len, il + len, ph - ib], // bottom-left bracket
     ];
-    Reserve { left: m.max(il), top: m.max(it), right: m.max(ir), bottom: m.max(ib), rects }
+    Reserve { left: il, top: it, right: ir, bottom: ib, rects }
 }
 
 /// True when the reservation maps onto itself under a 180° turn about the page centre -- the

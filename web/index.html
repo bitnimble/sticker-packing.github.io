@@ -173,10 +173,7 @@
     <label class="row" style="margin-top:16px"><input type="checkbox" id="regMarks"> <span>Reserve space for registration marks (Silhouette Cameo)</span></label>
     <div class="params" id="regOpts" style="display:none;margin-top:12px">
       <label><div class="lab">Mark length (in)</div><input type="number" id="regLength" value="0.787" step="0.001" min="0"></label>
-      <label><div class="lab">Left inset (in)</div><input type="number" id="regInsetL" value="0.625" step="0.001" min="0"></label>
-      <label><div class="lab">Top inset (in)</div><input type="number" id="regInsetT" value="0.625" step="0.001" min="0"></label>
-      <label><div class="lab">Right inset (in)</div><input type="number" id="regInsetR" value="0.625" step="0.001" min="0"></label>
-      <label><div class="lab">Bottom inset (in)</div><input type="number" id="regInsetB" value="0.625" step="0.001" min="0"></label>
+      <label><div class="lab">Inset (in)</div><input type="number" id="regInset" value="0.625" step="0.001" min="0"></label>
     </div>
 
     <details class="advanced">
@@ -195,6 +192,10 @@
         <label><div class="lab">Cut-line stroke (mm)</div><input type="number" id="stroke" value="0.1" step="0.05"></label>
         <label class="row" style="margin-top:22px"><input type="checkbox" id="pdf" checked> <span>Also generate PDF</span></label>
         <label class="row" style="margin-top:22px"><input type="checkbox" id="pdfBg" checked> <span>White background in PDF <span style="color:var(--muted)">(aligns Silhouette import)</span></span></label>
+        <label><div class="lab">Reg. left inset (in)</div><input type="number" id="regInsetL" step="0.001" min="0" placeholder="inset"></label>
+        <label><div class="lab">Reg. top inset (in)</div><input type="number" id="regInsetT" step="0.001" min="0" placeholder="inset"></label>
+        <label><div class="lab">Reg. right inset (in)</div><input type="number" id="regInsetR" step="0.001" min="0" placeholder="inset"></label>
+        <label><div class="lab">Reg. bottom inset (in)</div><input type="number" id="regInsetB" step="0.001" min="0" placeholder="inset"></label>
       </div>
     </details>
 
@@ -212,12 +213,12 @@
     <div class="sheets">
       <div class="sheet">
         <h3>Content sheet<span style="color:var(--muted);font-weight:400">, print this</span></h3>
-        <img id="contentImg" alt="content preview">
+        <img id="contentImg" alt="content preview" decoding="async">
         <div class="dl" id="contentDl"></div>
       </div>
       <div class="sheet">
         <h3>Outline sheet<span style="color:var(--muted);font-weight:400">, cut this</span></h3>
-        <img id="outlineImg" alt="outline preview">
+        <img id="outlineImg" alt="outline preview" decoding="async">
         <div class="dl" id="outlineDl"></div>
       </div>
     </div>

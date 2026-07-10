@@ -270,7 +270,12 @@ $('pagesize').addEventListener('change', () => {
   $('customPage').style.display = $<HTMLSelectElement>('pagesize').value === 'custom' ? 'grid' : 'none';
 });
 $('regMarks').addEventListener('change', () => {
-  $('regOpts').style.display = $<HTMLInputElement>('regMarks').checked ? 'grid' : 'none';
+  const on = $<HTMLInputElement>('regMarks').checked;
+  $('regOpts').style.display = on ? 'grid' : 'none';
+  // Registration inset defines the cut border, superseding the page margin -- disable it.
+  const marginEl = $<HTMLInputElement>('margin');
+  marginEl.disabled = on;
+  (marginEl.closest('label') as HTMLElement).style.opacity = on ? '0.5' : '';
 });
 function pageDims(): [number, number] {
   const v = $<HTMLSelectElement>('pagesize').value;
@@ -291,10 +296,27 @@ function setLink(container: HTMLElement, filename: string, blob: Blob): void {
 }
 
 // --- run -----------------------------------------------------------------
+// Drop the previous sheets (and free their blob URLs) so a repack doesn't leave stale output on
+// screen while the new sheets render.
+function clearResults(): void {
+  $('results').classList.remove('show');
+  for (const id of ['contentImg', 'outlineImg']) {
+    const img = $<HTMLImageElement>(id);
+    if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+    img.removeAttribute('src');
+  }
+  for (const a of document.querySelectorAll<HTMLAnchorElement>('#contentDl a, #outlineDl a')) {
+    if (a.href.startsWith('blob:')) URL.revokeObjectURL(a.href);
+  }
+  $('contentDl').innerHTML = '';
+  $('outlineDl').innerHTML = '';
+}
+
 $('run').addEventListener('click', async () => {
   if (!border) return;
   const runBtn = $<HTMLButtonElement>('run');
   runBtn.disabled = true;
+  clearResults();
   setStatus('');
   $('progress').style.display = 'block';
   $('bar').style.width = '0%';
@@ -303,6 +325,7 @@ $('run').addEventListener('click', async () => {
   try {
     const wantPdf = $<HTMLInputElement>('pdf').checked;
     const [pageW, pageH] = pageDims();
+    const regInset = num('regInset', 0.625);
     const args: PackArgs = {
       border: border.text,
       imageBytes: image.bytes,
@@ -322,10 +345,11 @@ $('run').addEventListener('click', async () => {
       pdfBackground: $<HTMLInputElement>('pdfBg').checked,
       regMarks: $<HTMLInputElement>('regMarks').checked,
       regLengthIn: num('regLength', 0.787),
-      regInsetLIn: num('regInsetL', 0.625),
-      regInsetTIn: num('regInsetT', 0.625),
-      regInsetRIn: num('regInsetR', 0.625),
-      regInsetBIn: num('regInsetB', 0.625),
+      // per-side fields (advanced) are blank by default and inherit the single Inset value
+      regInsetLIn: num('regInsetL', regInset),
+      regInsetTIn: num('regInsetT', regInset),
+      regInsetRIn: num('regInsetR', regInset),
+      regInsetBIn: num('regInsetB', regInset),
     };
     const res = await runInWorker(args, (stage, frac) => {
       $('bar').style.width = Math.round(frac * 100) + '%';
