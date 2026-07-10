@@ -174,15 +174,16 @@ function genOutline(style: string): string {
   previewCache.set(key, svg);
   return svg;
 }
-// Simplification (0-100): Douglas-Peucker tolerance on the traced silhouette, in trace pixels.
-function simplifyPx(): number {
-  return 1 + Math.pow(num('autoSimplify', 0) / 100, 1.5) * 60;
+// Simplification (0-100): morphological-closing radius on the silhouette, in trace pixels. Fills
+// dents smoothly and only grows the outline (never cuts in).
+function simplifyRadius(): number {
+  return Math.pow(num('autoSimplify', 0) / 100, 1.5) * 110;
 }
 async function traceCurrentArt(): Promise<void> {
   traced = null;
   previewCache.clear();
   if (!image.url) return;
-  try { traced = await traceArt({ bytes: image.bytes, ext: image.ext, url: image.url }, simplifyPx()); } catch { traced = null; }
+  try { traced = await traceArt({ bytes: image.bytes, ext: image.ext, url: image.url }, simplifyRadius()); } catch { traced = null; }
 }
 function regenAuto(): void {
   if (!autoEnabled()) return;

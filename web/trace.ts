@@ -143,6 +143,43 @@ function fillHoles(mask: Uint8Array, w: number, h: number): void {
   for (let i = 0; i < w * h; i++) if (!mask[i] && !outside[i]) mask[i] = 1;
 }
 
+// Chamfer distance transform: distance from each pixel to the nearest pixel where mask==src.
+function distField(mask: Uint8Array, w: number, h: number, src: number): Float32Array {
+  const INF = 1e9, D2 = Math.SQRT2;
+  const d = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) d[i] = mask[i] === src ? 0 : INF;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x; let v = d[i];
+    if (x > 0) v = Math.min(v, d[i - 1] + 1);
+    if (y > 0) v = Math.min(v, d[i - w] + 1);
+    if (x > 0 && y > 0) v = Math.min(v, d[i - w - 1] + D2);
+    if (x < w - 1 && y > 0) v = Math.min(v, d[i - w + 1] + D2);
+    d[i] = v;
+  }
+  for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) {
+    const i = y * w + x; let v = d[i];
+    if (x < w - 1) v = Math.min(v, d[i + 1] + 1);
+    if (y < h - 1) v = Math.min(v, d[i + w] + 1);
+    if (x < w - 1 && y < h - 1) v = Math.min(v, d[i + w + 1] + D2);
+    if (x > 0 && y < h - 1) v = Math.min(v, d[i + w - 1] + D2);
+    d[i] = v;
+  }
+  return d;
+}
+
+// Morphological closing (dilate by r, erode by r): fills concave dents narrower than 2r with
+// smooth outward arcs. Only ever grows (unioned with the original), so the outline never comes in.
+function close(mask: Uint8Array, w: number, h: number, r: number): Uint8Array {
+  if (r < 1) return mask;
+  const dOn = distField(mask, w, h, 1);
+  const dil = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) dil[i] = dOn[i] <= r ? 1 : 0;
+  const dOff = distField(dil, w, h, 0);
+  const out = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) out[i] = mask[i] || dOff[i] >= r ? 1 : 0;
+  return out;
+}
+
 // Clockwise Moore-neighbour boundary trace of the component with the given label.
 function mooreTrace(labels: Int32Array, w: number, h: number, id: number, start: number): number[][] {
   const fg = (x: number, y: number) => x >= 0 && x < w && y >= 0 && y < h && labels[y * w + x] === id;
@@ -209,10 +246,11 @@ function simplify(pts: number[][], eps: number): number[][] {
   return a.slice(0, -1).concat(b.slice(0, -1));
 }
 
-export async function traceArt(art: ArtFile, simplifyPx = 1.5): Promise<Traced> {
+export async function traceArt(art: ArtFile, simplifyRadius = 0): Promise<Traced> {
   const { px, w, h, vb, scale } = await rasterize(art);
-  const mask = contentMask(px, w, h);
+  let mask = contentMask(px, w, h);
   fillHoles(mask, w, h); // solid interior, so bright/white regions inside the subject don't punch holes
+  mask = close(mask, w, h, simplifyRadius); // Simplification: fill dents smoothly, grow-only
   const { labels, sizes } = label(mask, w, h);
   const firstPixel = new Int32Array(sizes.length).fill(-1);
   for (let i = 0; i < w * h; i++) { const l = labels[i]; if (l && firstPixel[l] < 0) firstPixel[l] = i; }
@@ -229,7 +267,7 @@ export async function traceArt(art: ArtFile, simplifyPx = 1.5): Promise<Traced> 
   // separate elements each keep their own outline.
   const contours: number[][] = [];
   for (const id of kept) {
-    const ring = simplify(mooreTrace(labels, w, h, id, firstPixel[id]), simplifyPx);
+    const ring = simplify(mooreTrace(labels, w, h, id, firstPixel[id]), 1.5);
     if (ring.length < 3) continue;
     const flat: number[] = [];
     for (const [x, y] of ring) flat.push(vb[0] + x * scale, vb[1] + y * scale);
