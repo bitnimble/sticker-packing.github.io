@@ -29,7 +29,8 @@
   .drop:hover, .drop.over { border-color: var(--accent); background: #1b2430; color: var(--ink); }
   .drop input { display: none; }
   .checker { background: repeating-conic-gradient(#2a323c 0 25%, #222932 0 50%) 0 0 / 20px 20px; }
-  .filecard { display: flex; align-items: center; gap: 12px; }
+  .filecard { display: flex; align-items: center; gap: 12px; border-radius: 8px; }
+  .filecard.over { outline: 2px dashed var(--accent); outline-offset: 3px; }
   .filecard img { width: 72px; height: 72px; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; }
   .filecard .name { flex: 1; min-width: 0; color: var(--ink); font-size: 13px; word-break: break-all; }
   .filecard .clear {

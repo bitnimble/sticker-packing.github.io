@@ -104,18 +104,22 @@ $('previewOutlineColor').addEventListener('input', updateOutlineStroke);
 $('previewOutlineWidth').addEventListener('input', updateOutlineStroke);
 
 // --- file inputs: preview replaces the drop zone -------------------------
-function wireDrop(dropId: string, inputId: string, onFile: (f: File) => void): void {
+// The drop zone AND the filecard both accept drops, so a file can be swapped out by dropping a new
+// one onto the card without clearing first (the drop zone is hidden while the card shows).
+function wireDrop(dropId: string, inputId: string, cardId: string, onFile: (f: File) => void): void {
   const drop = $(dropId);
   const input = $<HTMLInputElement>(inputId);
   drop.addEventListener('click', () => input.click());
-  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
-  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-  drop.addEventListener('drop', (e: DragEvent) => {
-    e.preventDefault();
-    drop.classList.remove('over');
-    const f = e.dataTransfer?.files[0];
-    if (f) onFile(f);
-  });
+  for (const el of [drop, $(cardId)]) {
+    el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('over'); });
+    el.addEventListener('dragleave', () => el.classList.remove('over'));
+    el.addEventListener('drop', (e: DragEvent) => {
+      e.preventDefault();
+      el.classList.remove('over');
+      const f = e.dataTransfer?.files[0];
+      if (f) onFile(f);
+    });
+  }
   input.addEventListener('change', () => { if (input.files?.[0]) onFile(input.files[0]); });
 }
 function showCard(kind: string, url: string, name: string): void {
@@ -128,14 +132,18 @@ function clearCard(kind: string): void {
   $(kind + 'Card').style.display = 'none';
   $(kind + 'Drop').style.display = 'block';
   $<HTMLInputElement>(kind + 'File').value = '';
+  // Drop the (revoked) blob reference: leaving it on the img can leave it in an error state that a
+  // later src assignment won't reliably reload from.
+  $<HTMLImageElement>(kind + 'ThumbImg').removeAttribute('src');
 }
 
-wireDrop('borderDrop', 'borderFile', async (file) => {
+wireDrop('borderDrop', 'borderFile', 'borderCard', async (file) => {
   const text = await file.text();
-  if (manualBorder?.url) URL.revokeObjectURL(manualBorder.url);
+  const old = manualBorder?.url;
   manualBorder = { text, url: URL.createObjectURL(new Blob([text], { type: 'image/svg+xml' })) };
   showCard('border', manualBorder.url, file.name);
   if (!autoEnabled()) { border = manualBorder; maybeEnable(); updatePreview(); }
+  if (old) URL.revokeObjectURL(old);
 });
 $('borderClear').addEventListener('click', () => {
   if (manualBorder?.url) URL.revokeObjectURL(manualBorder.url);
@@ -144,16 +152,17 @@ $('borderClear').addEventListener('click', () => {
   if (!autoEnabled()) { border = null; maybeEnable(); updatePreview(); }
 });
 
-wireDrop('imageDrop', 'imageFile', async (file) => {
+wireDrop('imageDrop', 'imageFile', 'imageCard', async (file) => {
   const buf = new Uint8Array(await file.arrayBuffer());
   const ext = (file.name.split('.').pop() || '').toLowerCase();
-  if (image.url) URL.revokeObjectURL(image.url);
+  const old = image.url;
   const mime = ext === 'svg' ? 'image/svg+xml' : file.type || 'application/octet-stream';
   const url = URL.createObjectURL(new Blob([buf], { type: mime }));
   image = { bytes: buf, ext, url };
   base = null;
   showCard('image', url, file.name);
   await onArtChanged();
+  if (old) URL.revokeObjectURL(old); // revoke only after the new art has rendered
 });
 $('imageClear').addEventListener('click', () => {
   if (image.url) URL.revokeObjectURL(image.url);
