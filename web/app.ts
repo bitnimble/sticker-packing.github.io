@@ -177,10 +177,10 @@ function genOutline(style: string): string {
   previewCache.set(key, svg);
   return svg;
 }
-// Simplification (0-100): morphological-closing radius on the silhouette, in trace pixels. Fills
-// dents smoothly and only grows the outline (never cuts in).
-function simplifyRadius(): number {
-  return Math.pow(num('autoSimplify', 0) / 100, 1.5) * 110;
+// Simplification (0-100) as a 0..1 amount: outward-only, amplitude-ordered smoothing of the
+// silhouette -- shallow wiggles smooth away first, prominent notches survive, outline only grows.
+function simplifyAmount(): number {
+  return num('autoSimplify', 0) / 100;
 }
 async function traceCurrentArt(): Promise<void> {
   traced = null;
@@ -189,7 +189,7 @@ async function traceCurrentArt(): Promise<void> {
   try {
     // Rasterize+mask is cached per art; only the close/label/trace re-runs when Simplification moves.
     if (!base) base = await traceBase({ bytes: image.bytes, ext: image.ext, url: image.url });
-    traced = traceFinish(base, simplifyRadius());
+    traced = traceFinish(base, simplifyAmount());
   } catch { traced = null; }
 }
 function regenAuto(): void {

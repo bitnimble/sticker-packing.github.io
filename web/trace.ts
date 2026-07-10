@@ -153,51 +153,47 @@ function fillHoles(mask: Uint8Array, w: number, h: number): void {
   for (let i = 0; i < w * h; i++) if (!mask[i] && !outside[i]) mask[i] = 1;
 }
 
-// Chamfer distance transform: distance from each pixel to the nearest pixel where mask==src.
-function distField(mask: Uint8Array, w: number, h: number, src: number): Float32Array {
-  const INF = 1e9, D2 = Math.SQRT2;
-  const d = new Float32Array(w * h);
-  for (let i = 0; i < w * h; i++) d[i] = mask[i] === src ? 0 : INF;
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const i = y * w + x; let v = d[i];
-    if (x > 0) v = Math.min(v, d[i - 1] + 1);
-    if (y > 0) v = Math.min(v, d[i - w] + 1);
-    if (x > 0 && y > 0) v = Math.min(v, d[i - w - 1] + D2);
-    if (x < w - 1 && y > 0) v = Math.min(v, d[i - w + 1] + D2);
-    d[i] = v;
-  }
-  for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) {
-    const i = y * w + x; let v = d[i];
-    if (x < w - 1) v = Math.min(v, d[i + 1] + 1);
-    if (y < h - 1) v = Math.min(v, d[i + w] + 1);
-    if (x < w - 1 && y < h - 1) v = Math.min(v, d[i + w + 1] + D2);
-    if (x > 0 && y < h - 1) v = Math.min(v, d[i + w - 1] + D2);
-    d[i] = v;
-  }
-  return d;
+function polySignedArea(pts: number[][]): number {
+  let a = 0;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1];
+  return a / 2;
 }
 
-// Morphological closing (dilate by r, erode by r): fills concave dents narrower than 2r with
-// smooth outward arcs. Only ever grows (unioned with the original), so the outline never comes in.
-// Runs on a background-padded buffer so out-of-canvas counts as background: without the pad, the
-// dilation grows toward each canvas edge and the erosion (whose distance-to-background is unbounded
-// past the edge) can't eat it back, leaving cardinal-direction spikes wherever the shape sits near
-// an edge.
-function close(mask: Uint8Array, w: number, h: number, r: number): Uint8Array {
-  if (r < 1) return mask;
-  const p = Math.ceil(r) + 2;
-  const pw = w + 2 * p, ph = h + 2 * p;
-  const pad = new Uint8Array(pw * ph);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (mask[y * w + x]) pad[(y + p) * pw + (x + p)] = 1;
-  const dOn = distField(pad, pw, ph, 1);
-  const dil = new Uint8Array(pw * ph);
-  for (let i = 0; i < pw * ph; i++) dil[i] = dOn[i] <= r ? 1 : 0;
-  const dOff = distField(dil, pw, ph, 0);
-  const out = new Uint8Array(w * h);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const i = y * w + x;
-    out[i] = mask[i] || dOff[(y + p) * pw + (x + p)] >= r ? 1 : 0;
+// Outward-only, amplitude-ordered smoothing (Simplification). Repeatedly drops the shallowest
+// remaining reflex (concave) vertex whose bump is below maxDev, filling that dent with the chord
+// across it -- so subtle wiggles smooth away first while prominent notches, deeper than maxDev,
+// survive until last. Only concave vertices are ever removed and the chord fills outward, so the
+// outline only grows and never cuts into the shape. maxDev is the perpendicular depth threshold in
+// the same units as the points.
+function simplifyOutward(pts: number[][], maxDev: number): number[][] {
+  const n = pts.length;
+  if (n < 4 || maxDev <= 0) return pts;
+  const orient = Math.sign(polySignedArea(pts));
+  const next = new Int32Array(n), prev = new Int32Array(n), alive = new Uint8Array(n).fill(1);
+  for (let i = 0; i < n; i++) { next[i] = (i + 1) % n; prev[i] = (i + n - 1) % n; }
+  // Perpendicular depth of vertex i past the chord prev..next, or -1 when convex/straight (kept).
+  const reflexDev = (i: number): number => {
+    const u = pts[prev[i]], v = pts[i], w = pts[next[i]];
+    const cross = (v[0] - u[0]) * (w[1] - v[1]) - (v[1] - u[1]) * (w[0] - v[0]);
+    if (cross === 0 || Math.sign(cross) === orient) return -1;
+    return Math.abs(cross) / (Math.hypot(w[0] - u[0], w[1] - u[1]) || 1);
+  };
+  const dev = new Float64Array(n);
+  for (let i = 0; i < n; i++) dev[i] = reflexDev(i);
+  let count = n;
+  while (count > 3) {
+    let best = -1, bestDev = maxDev;
+    for (let i = 0; i < n; i++) if (alive[i] && dev[i] >= 0 && dev[i] < bestDev) { bestDev = dev[i]; best = i; }
+    if (best < 0) break;
+    const p = prev[best], nx = next[best];
+    alive[best] = 0; next[p] = nx; prev[nx] = p; count--;
+    dev[p] = reflexDev(p); dev[nx] = reflexDev(nx);
   }
+  const out: number[][] = [];
+  let i = 0;
+  while (!alive[i]) i++;
+  const start = i;
+  do { out.push(pts[i]); i = next[i]; } while (i !== start);
   return out;
 }
 
@@ -276,11 +272,10 @@ export async function traceBase(art: ArtFile): Promise<BaseRaster> {
   return { mask, w, h, vb, scale };
 }
 
-// Close (Simplification), label, and trace the base mask into contours -- cheap enough to re-run per
-// slider tick. close() reads the base mask without mutating it, so the cached base stays reusable.
-export function traceFinish(base: BaseRaster, simplifyRadius = 0): Traced {
-  const { mask: baseMask, w, h, vb, scale } = base;
-  const mask = close(baseMask, w, h, simplifyRadius); // Simplification: fill dents smoothly, grow-only
+// Label + trace the base mask into contours, then smooth each with the Simplification amount
+// (0..1). Cheap enough to re-run per slider tick; the base mask is read-only so the cache holds.
+export function traceFinish(base: BaseRaster, simplifyAmount = 0): Traced {
+  const { mask, w, h, vb, scale } = base;
   const { labels, sizes } = label(mask, w, h);
   const firstPixel = new Int32Array(sizes.length).fill(-1);
   for (let i = 0; i < w * h; i++) { const l = labels[i]; if (l && firstPixel[l] < 0) firstPixel[l] = i; }
@@ -292,16 +287,21 @@ export function traceFinish(base: BaseRaster, simplifyRadius = 0): Traced {
     .slice(0, 400);
   if (!kept.length) throw new Error('no content found in the art');
 
+  // Depth threshold: dents shallower than this are smoothed away, deeper notches survive. Fraction
+  // of the shape size, ramped so the low end of the slider stays subtle.
+  const maxDev = Math.pow(simplifyAmount, 1.5) * Math.max(vb[2], vb[3]) * 0.1;
+
   // Trace every kept component (subject, text, watermark, particles) -- nothing is dropped. The
   // offset stage dilates and unions them, so adjacent pieces (e.g. neighbouring letters) fuse while
   // separate elements each keep their own outline.
   const contours: number[][] = [];
   for (const id of kept) {
-    const ring = simplify(mooreTrace(labels, w, h, id, firstPixel[id]), 1.5);
+    let ring = simplify(mooreTrace(labels, w, h, id, firstPixel[id]), 1.5);
     if (ring.length < 3) continue;
-    const flat: number[] = [];
-    for (const [x, y] of ring) flat.push(vb[0] + x * scale, vb[1] + y * scale);
-    contours.push(flat);
+    ring = ring.map(([x, y]) => [vb[0] + x * scale, vb[1] + y * scale]);
+    ring = simplifyOutward(ring, maxDev);
+    if (ring.length < 3) continue;
+    contours.push(ring.flat());
   }
   if (!contours.length) throw new Error('no content found in the art');
   return { contours, vb };
