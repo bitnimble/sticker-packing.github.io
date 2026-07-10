@@ -81,6 +81,104 @@ pub fn svg_to_pdf(svg: &str) -> Result<Vec<u8>, String> {
     let tree = svg2pdf::usvg::Tree::from_str(svg, &svg2pdf::usvg::Options::default())
         .map_err(|e| format!("pdf parse: {e}"))?;
     let page = svg2pdf::PageOptions { dpi: 96.0 };
-    svg2pdf::to_pdf(&tree, svg2pdf::ConversionOptions::default(), page)
-        .map_err(|e| format!("pdf convert: {e}"))
+    let pdf = svg2pdf::to_pdf(&tree, svg2pdf::ConversionOptions::default(), page)
+        .map_err(|e| format!("pdf convert: {e}"))?;
+    // svg2pdf emits a fresh image XObject per placement (it expands every <use>), so a tessellated
+    // raster is embedded N times. Merge byte-identical streams back into one shared object.
+    Ok(dedupe_streams(pdf))
+}
+
+/// Collapse duplicate stream objects (identical images / soft-masks that svg2pdf duplicated per
+/// placement) into a single shared object and repoint every reference. Purely a size optimization:
+/// merging value-identical objects cannot change what the PDF renders. On any parse/write failure
+/// the original bytes are returned unchanged.
+#[cfg(feature = "pdf")]
+fn dedupe_streams(bytes: Vec<u8>) -> Vec<u8> {
+    use lopdf::{Document, Object, ObjectId};
+    use std::collections::HashMap;
+
+    let mut doc = match Document::load_mem(&bytes) {
+        Ok(d) => d,
+        Err(_) => return bytes,
+    };
+    // Fixpoint: masks (no inner refs) merge first; once images' /SMask refs are repointed to the
+    // canonical mask, the image streams become identical too and merge on the next pass.
+    loop {
+        let mut canonical: HashMap<u64, ObjectId> = HashMap::new();
+        let mut remap: HashMap<ObjectId, ObjectId> = HashMap::new();
+        for (&id, obj) in &doc.objects {
+            if matches!(obj, Object::Stream(_)) {
+                let h = hash_object(obj);
+                match canonical.get(&h) {
+                    Some(&keep) => { remap.insert(id, keep); }
+                    None => { canonical.insert(h, id); }
+                }
+            }
+        }
+        if remap.is_empty() {
+            break;
+        }
+        for id in remap.keys() {
+            doc.objects.remove(id);
+        }
+        for obj in doc.objects.values_mut() {
+            remap_refs(obj, &remap);
+        }
+        for (_, v) in doc.trailer.iter_mut() {
+            remap_refs(v, &remap);
+        }
+    }
+    doc.renumber_objects();
+    let mut out = Vec::new();
+    match doc.save_to(&mut out) {
+        Ok(()) => out,
+        Err(_) => bytes,
+    }
+}
+
+#[cfg(feature = "pdf")]
+fn hash_object(o: &lopdf::Object) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    hash_into(o, &mut h);
+    h.finish()
+}
+
+#[cfg(feature = "pdf")]
+fn hash_into(o: &lopdf::Object, h: &mut impl std::hash::Hasher) {
+    use lopdf::Object::*;
+    match o {
+        Null => h.write_u8(0),
+        Boolean(b) => { h.write_u8(1); h.write_u8(*b as u8); }
+        Integer(i) => { h.write_u8(2); h.write_i64(*i); }
+        Real(r) => { h.write_u8(3); h.write_u32(r.to_bits()); }
+        Name(n) => { h.write_u8(4); h.write(n); }
+        String(s, _) => { h.write_u8(5); h.write(s); }
+        Reference(id) => { h.write_u8(6); h.write_u32(id.0); h.write_u16(id.1); }
+        Array(a) => { h.write_u8(7); for x in a { hash_into(x, h); } }
+        Dictionary(d) => { h.write_u8(8); hash_dict(d, h); }
+        Stream(s) => { h.write_u8(9); hash_dict(&s.dict, h); h.write(&s.content); }
+    }
+}
+
+#[cfg(feature = "pdf")]
+fn hash_dict(d: &lopdf::Dictionary, h: &mut impl std::hash::Hasher) {
+    let mut entries: Vec<(&Vec<u8>, &lopdf::Object)> = d.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    for (k, v) in entries {
+        h.write(k);
+        hash_into(v, h);
+    }
+}
+
+#[cfg(feature = "pdf")]
+fn remap_refs(o: &mut lopdf::Object, m: &std::collections::HashMap<lopdf::ObjectId, lopdf::ObjectId>) {
+    use lopdf::Object::*;
+    match o {
+        Reference(id) => { if let Some(&c) = m.get(id) { *id = c; } }
+        Array(a) => { for x in a { remap_refs(x, m); } }
+        Dictionary(d) => { for (_, v) in d.iter_mut() { remap_refs(v, m); } }
+        Stream(s) => { for (_, v) in s.dict.iter_mut() { remap_refs(v, m); } }
+        _ => {}
+    }
 }
