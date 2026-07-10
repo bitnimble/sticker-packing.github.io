@@ -56,6 +56,23 @@ pub fn content_svg(inner: &str, border_vb: &Poly, norm: &Mat, placements: &[Plac
     s
 }
 
+/// Content sheet where each sticker is a single pre-clipped raster (the outline baked into the
+/// image's alpha), placed by transform with no vector clip path. Silhouette imports each placement
+/// as one raster, instead of exploding a clip-path + image + soft-mask into stacked polygons.
+pub fn content_svg_baked(href: &str, vb: &[f64; 4], norm: &Mat, placements: &[Placement], pw: f64, ph: f64) -> String {
+    let mut s = header(pw, ph);
+    s.push_str(&format!(
+        "<defs><image id=\"sticker\" xlink:href=\"{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\"/></defs>\n",
+        href, vb[0], vb[1], vb[2], vb[3]
+    ));
+    for p in placements {
+        let m = mat_compose(&place_mat(p.angle, p.x, p.y), norm);
+        s.push_str(&format!("<use xlink:href=\"#sticker\" transform=\"{}\"/>\n", svg_matrix(&m)));
+    }
+    s.push_str("</svg>\n");
+    s
+}
+
 /// Outline sheet (cut file): the un-grown border outline at the same placements, as unfilled
 /// stroked cut lines. `norm_border` is the normalized (packing-space) border polygon.
 pub fn outline_svg(norm_border: &Poly, placements: &[Placement], pw: f64, ph: f64, stroke: f64) -> String {
@@ -85,6 +102,111 @@ pub fn add_background(svg: &str, pw: f64, ph: f64) -> String {
         Some(i) => format!("{}{}{}", &svg[..=i], rect, &svg[i + 1..]),
         None => svg.to_string(),
     }
+}
+
+/// Bake the border outline into the art raster's alpha: decode `image_bytes`, zero the alpha of
+/// every pixel outside the outline (mapped from viewBox units to the art's pixel grid), re-encode
+/// as PNG. The art is assumed to span the whole viewBox 1:1. Result is a single sticker-shaped
+/// image that needs no clip path.
+#[cfg(feature = "pdf")]
+pub fn bake_clipped_png(image_bytes: &[u8], outline: &Poly, vb: &[f64; 4]) -> Result<Vec<u8>, String> {
+    let src = image::load_from_memory(image_bytes).map_err(|e| format!("decode art: {e}"))?;
+    let (w, h) = (src.width(), src.height());
+    let mut buf = src.to_rgba8().into_raw();
+    let mask = rasterize_mask(outline, vb, w as usize, h as usize);
+    for i in 0..(w * h) as usize {
+        buf[i * 4 + 3] = (buf[i * 4 + 3] as u32 * mask[i] as u32 / 255) as u8;
+    }
+    // Bleed opaque colours into the transparent margin so a downscaling renderer blends the edge
+    // colour across the sticker boundary rather than a fringe of the arbitrary transparent-pixel RGB.
+    bleed_edges(&mut buf, w as usize, h as usize);
+    let img = image::RgbaImage::from_raw(w, h, buf).ok_or("rebuild sticker image")?;
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(&mut out, image::ImageFormat::Png)
+        .map_err(|e| format!("encode sticker png: {e}"))?;
+    Ok(out.into_inner())
+}
+
+/// Copy the RGB of the nearest opaque pixel outward into transparent pixels (bounded flood; alpha
+/// stays 0). With unpremultiplied alpha, a downscaling renderer averages neighbouring RGB, so the
+/// transparent margin must carry the edge colour or it fringes the sticker outline.
+#[cfg(feature = "pdf")]
+fn bleed_edges(buf: &mut [u8], w: usize, h: usize) {
+    let n = w * h;
+    let mut known: Vec<bool> = (0..n).map(|i| buf[i * 4 + 3] > 0).collect();
+    let mut frontier: Vec<usize> = (0..n)
+        .filter(|&i| {
+            known[i]
+                && ((i % w > 0 && !known[i - 1]) || (i % w < w - 1 && !known[i + 1])
+                    || (i >= w && !known[i - w]) || (i + w < n && !known[i + w]))
+        })
+        .collect();
+    for _ in 0..32 {
+        if frontier.is_empty() {
+            break;
+        }
+        let mut next = Vec::new();
+        for &i in &frontier {
+            let (r, g, b) = (buf[i * 4], buf[i * 4 + 1], buf[i * 4 + 2]);
+            let (x, y) = (i % w, i / w);
+            let mut nbrs = [0usize; 4];
+            let mut c = 0;
+            if x > 0 { nbrs[c] = i - 1; c += 1; }
+            if x < w - 1 { nbrs[c] = i + 1; c += 1; }
+            if y > 0 { nbrs[c] = i - w; c += 1; }
+            if y < h - 1 { nbrs[c] = i + w; c += 1; }
+            for &j in &nbrs[..c] {
+                if !known[j] {
+                    known[j] = true;
+                    buf[j * 4] = r;
+                    buf[j * 4 + 1] = g;
+                    buf[j * 4 + 2] = b;
+                    next.push(j);
+                }
+            }
+        }
+        frontier = next;
+    }
+}
+
+/// Even-odd scanline fill of a polygon (exterior + holes) into a `w*h` 0/255 mask.
+#[cfg(feature = "pdf")]
+fn rasterize_mask(outline: &Poly, vb: &[f64; 4], w: usize, h: usize) -> Vec<u8> {
+    let mut mask = vec![0u8; w * h];
+    let (sx, sy) = (w as f64 / vb[2], h as f64 / vb[3]);
+    let mut edges: Vec<(f64, f64, f64, f64)> = Vec::new();
+    for ring in std::iter::once(outline.exterior()).chain(outline.interiors()) {
+        let pts: Vec<(f64, f64)> = ring.0.iter().map(|c| ((c.x - vb[0]) * sx, (c.y - vb[1]) * sy)).collect();
+        for e in pts.windows(2) {
+            edges.push((e[0].0, e[0].1, e[1].0, e[1].1));
+        }
+    }
+    let mut xs: Vec<f64> = Vec::new();
+    for y in 0..h {
+        let yc = y as f64 + 0.5;
+        xs.clear();
+        for &(x0, y0, x1, y1) in &edges {
+            let (lo, hi) = if y0 < y1 { (y0, y1) } else { (y1, y0) };
+            if yc >= lo && yc < hi {
+                xs.push(x0 + (yc - y0) / (y1 - y0) * (x1 - x0));
+            }
+        }
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mut k = 0;
+        while k + 1 < xs.len() {
+            let a = (xs[k] - 0.5).ceil().max(0.0) as usize;
+            let bf = (xs[k + 1] - 0.5).floor();
+            if bf >= 0.0 {
+                let b = (bf as usize).min(w - 1);
+                for x in a..=b {
+                    mask[y * w + x] = 255;
+                }
+            }
+            k += 2;
+        }
+    }
+    mask
 }
 
 /// Render an SVG string to a PDF (dpi=96 so mm -> pt yields exact physical A4).

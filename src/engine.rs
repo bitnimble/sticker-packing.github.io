@@ -212,6 +212,32 @@ pub fn auto_outline_svg(points: &[f64], lengths: &[u32], vb: &[f64; 4], margin: 
     ))
 }
 
+/// Build the content sheet. Raster art (pdf build) is baked one sticker at a time into a single
+/// pre-clipped image so Silhouette imports each as one raster; SVG art keeps the vector clip.
+#[cfg(feature = "pdf")]
+fn build_content_svg(
+    border_svg: &str, image_bytes: &[u8], image_ext: &str,
+    outline: &Poly, vb: &[f64; 4], norm: &Mat, placements: &[greedy::Placement], pw: f64, ph: f64,
+) -> Result<String, String> {
+    let ext = image_ext.trim().trim_start_matches('.').to_ascii_lowercase();
+    if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "bmp" | "gif" | "webp") {
+        let png = output::bake_clipped_png(image_bytes, outline, vb)?;
+        let href = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&png));
+        return Ok(output::content_svg_baked(&href, vb, norm, placements, pw, ph));
+    }
+    let inner = build_inner(border_svg, image_bytes, image_ext, vb, None)?;
+    Ok(output::content_svg(&inner, outline, norm, placements, pw, ph))
+}
+
+#[cfg(not(feature = "pdf"))]
+fn build_content_svg(
+    border_svg: &str, image_bytes: &[u8], image_ext: &str,
+    outline: &Poly, vb: &[f64; 4], norm: &Mat, placements: &[greedy::Placement], pw: f64, ph: f64,
+) -> Result<String, String> {
+    let inner = build_inner(border_svg, image_bytes, image_ext, vb, None)?;
+    Ok(output::content_svg(&inner, outline, norm, placements, pw, ph))
+}
+
 /// Angular distance of `deg` from the artwork's original orientation (0°), in [0, 180].
 fn upright_deviation(deg: f64) -> f64 {
     let a = deg.rem_euclid(360.0);
@@ -250,7 +276,6 @@ pub fn run_pack(
     progress("Preparing", 0.05);
     let outline = svgio::load_outline_str(border_svg)?;
     let vb = svgio::read_viewbox_str(border_svg)?;
-    let inner = build_inner(border_svg, image_bytes, image_ext, &vb, None)?;
     let (norm, norm_mat) = normalize(&outline, p.sticker_width);
     let packing = simplify_poly(&norm, p.simplify);
     let grown = simplify_poly(&buffer(&packing, p.spacing / 2.0 + 1e-4, 16), p.simplify);
@@ -285,7 +310,7 @@ pub fn run_pack(
     let placements = if reserve_symmetric(&reserve) { orient_upright(placements, pw, ph) } else { placements };
 
     progress("Content sheet", 0.82);
-    let content_svg = output::content_svg(&inner, &outline, &norm_mat, &placements, pw, ph);
+    let content_svg = build_content_svg(border_svg, image_bytes, image_ext, &outline, &vb, &norm_mat, &placements, pw, ph)?;
     progress("Outline sheet", 0.86);
     let outline_svg = output::outline_svg(&norm, &placements, pw, ph, p.stroke);
     let (content_pdf, outline_pdf) = if p.want_pdf {

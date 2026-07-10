@@ -21,7 +21,7 @@ required-features = ["render"]
 default = ["native", "parallel", "pdf", "render"]
 native = ["dep:clap"]
 parallel = ["dep:rayon"]
-pdf = ["dep:svg2pdf", "dep:lopdf"]
+pdf = ["dep:svg2pdf", "dep:lopdf", "dep:image"]
 render = ["dep:resvg"]
 # Browser multithreading: rayon over a Web Worker pool (needs nightly + -Zbuild-std + atomics).
 wasm-threads = ["parallel", "dep:wasm-bindgen-rayon"]
@@ -39,6 +39,7 @@ rayon = { version = "1.10", optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
 svg2pdf = { version = "0.12", optional = true }
 lopdf = { version = "0.34", optional = true, default-features = false, features = ["nom_parser"] }
+image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp"] }
 resvg = { version = "0.44", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
