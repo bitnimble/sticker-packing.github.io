@@ -131,10 +131,11 @@ pub fn read_art_region(svg: &str) -> Result<[f64; 4], String> {
     }
 }
 
-/// Border and image must share a viewBox (same coordinate space) or their relative alignment
-/// is undefined. Returns the shared viewBox; errors on mismatch.
+/// The image and the border's art region must share a coordinate space or their relative alignment
+/// is undefined. (An auto-outline border enlarges its viewBox past the art, so compare against its
+/// art region, not its viewBox.) Returns the shared box; errors on mismatch.
 pub fn require_same_viewbox_str(border: &str, image: &str) -> Result<[f64; 4], String> {
-    let a = read_viewbox_str(border).map_err(|e| format!("border: {e}"))?;
+    let a = read_art_region(border).map_err(|e| format!("border: {e}"))?;
     let b = read_viewbox_str(image).map_err(|e| format!("image: {e}"))?;
     if a.iter().zip(&b).all(|(x, y)| (x - y).abs() <= 1e-4 * x.abs().max(y.abs()).max(1.0)) {
         Ok(a)

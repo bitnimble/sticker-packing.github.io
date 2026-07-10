@@ -407,6 +407,15 @@ mod tests {
     }
 
     #[test]
+    fn svg_art_matches_border_art_region_not_viewbox() {
+        // The auto-outline border's viewBox is enlarged past the art, but its data-art matches the
+        // SVG art's viewBox, so the alignment check must pass.
+        let border = "<svg viewBox=\"-15 -15 130 130\" data-art=\"0 0 100 100\"></svg>";
+        let art = "<svg viewBox=\"0 0 100 100\"></svg>";
+        assert!(crate::svgio::require_same_viewbox_str(border, art).is_ok());
+    }
+
+    #[test]
     fn art_region_from_data_attr_or_viewbox() {
         // Auto-outline: enlarged viewBox, art region carried in data-art.
         let with = "<svg viewBox=\"-15 -15 130 130\" data-art=\"0 0 100 100\"></svg>";
