@@ -1,6 +1,6 @@
 // Main-thread UI. Live preview runs here (fast, synchronous); packing runs in a Web Worker.
 import init, { preview, auto_outline } from './sticker_packer.js';
-import { traceArt, type Traced } from './trace.js';
+import { traceBase, traceFinish, type Traced, type BaseRaster } from './trace.js';
 import type { PackArgs, ProgressFn, WorkerOut, WorkerResult } from './types.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -17,6 +17,7 @@ let border: BorderFile | null = null; // active border (manual upload or auto-ge
 let manualBorder: BorderFile | null = null;
 let image: ImageFile = { bytes: new Uint8Array(0), ext: '', url: null };
 let traced: Traced | null = null; // silhouette of the current art, for auto-outline
+let base: BaseRaster | null = null; // cached rasterize+mask for the current art (radius-independent)
 let previewReady = false;
 let workerReady = false;
 
@@ -131,6 +132,7 @@ wireDrop('imageDrop', 'imageFile', async (file) => {
   const mime = ext === 'svg' ? 'image/svg+xml' : file.type || 'application/octet-stream';
   const url = URL.createObjectURL(new Blob([buf], { type: mime }));
   image = { bytes: buf, ext, url };
+  base = null;
   showCard('image', url, file.name);
   await onArtChanged();
 });
@@ -138,6 +140,7 @@ $('imageClear').addEventListener('click', () => {
   if (image.url) URL.revokeObjectURL(image.url);
   image = { bytes: new Uint8Array(0), ext: '', url: null };
   traced = null;
+  base = null;
   previewCache.clear();
   clearCard('image');
   if (autoEnabled()) regenAuto();
@@ -182,8 +185,12 @@ function simplifyRadius(): number {
 async function traceCurrentArt(): Promise<void> {
   traced = null;
   previewCache.clear();
-  if (!image.url) return;
-  try { traced = await traceArt({ bytes: image.bytes, ext: image.ext, url: image.url }, simplifyRadius()); } catch { traced = null; }
+  if (!image.url) { base = null; return; }
+  try {
+    // Rasterize+mask is cached per art; only the close/label/trace re-runs when Simplification moves.
+    if (!base) base = await traceBase({ bytes: image.bytes, ext: image.ext, url: image.url });
+    traced = traceFinish(base, simplifyRadius());
+  } catch { traced = null; }
 }
 function regenAuto(): void {
   if (!autoEnabled()) return;
@@ -221,10 +228,16 @@ $('autoOutline').addEventListener('change', async () => {
     updatePreview();
   }
 });
+// Sliders fire `input` continuously while dragging; coalesce so the trace/WASM pipeline runs once
+// the drag settles instead of per-tick.
+function debounce(fn: () => unknown, ms: number): () => void {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  return () => { clearTimeout(t); t = setTimeout(fn, ms); };
+}
 $('autoMargin').addEventListener('input', () => { previewCache.clear(); regenAuto(); });
 $('width').addEventListener('input', () => { previewCache.clear(); regenAuto(); });
-$('autoRound').addEventListener('input', () => { previewCache.clear(); regenAuto(); });
-$('autoSimplify').addEventListener('input', async () => { await traceCurrentArt(); regenAuto(); });
+$('autoRound').addEventListener('input', debounce(() => { previewCache.clear(); regenAuto(); }, 150));
+$('autoSimplify').addEventListener('input', debounce(async () => { await traceCurrentArt(); regenAuto(); }, 150));
 document.querySelectorAll('input[name=autostyle]').forEach((r) => r.addEventListener('change', regenAuto));
 
 const stylePrev = $('stylePreview');

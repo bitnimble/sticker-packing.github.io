@@ -15,6 +15,16 @@ export interface Traced {
 
 export interface ArtFile { bytes: Uint8Array; ext: string; url: string; }
 
+// Rasterized content mask before the Simplification close -- everything independent of the radius,
+// so it's computed once per art and reused across slider changes.
+export interface BaseRaster {
+  mask: Uint8Array;
+  w: number;
+  h: number;
+  vb: [number, number, number, number];
+  scale: number;
+}
+
 const MAX_DIM = 800; // cap tracing raster resolution for speed
 const ALPHA = 24; // opacity threshold -- low, so faint/wispy edges (hair) count as content
 const BG_TOL2 = 60 * 60; // squared RGB distance from background that counts as content
@@ -257,11 +267,20 @@ function simplify(pts: number[][], eps: number): number[][] {
   return a.slice(0, -1).concat(b.slice(0, -1));
 }
 
-export async function traceArt(art: ArtFile, simplifyRadius = 0): Promise<Traced> {
+// Rasterize + content mask + hole fill. The expensive part (image decode, canvas readback) and the
+// only part independent of the Simplification radius -- cache the result and reuse it per slider tick.
+export async function traceBase(art: ArtFile): Promise<BaseRaster> {
   const { px, w, h, vb, scale } = await rasterize(art);
-  let mask = contentMask(px, w, h);
+  const mask = contentMask(px, w, h);
   fillHoles(mask, w, h); // solid interior, so bright/white regions inside the subject don't punch holes
-  mask = close(mask, w, h, simplifyRadius); // Simplification: fill dents smoothly, grow-only
+  return { mask, w, h, vb, scale };
+}
+
+// Close (Simplification), label, and trace the base mask into contours -- cheap enough to re-run per
+// slider tick. close() reads the base mask without mutating it, so the cached base stays reusable.
+export function traceFinish(base: BaseRaster, simplifyRadius = 0): Traced {
+  const { mask: baseMask, w, h, vb, scale } = base;
+  const mask = close(baseMask, w, h, simplifyRadius); // Simplification: fill dents smoothly, grow-only
   const { labels, sizes } = label(mask, w, h);
   const firstPixel = new Int32Array(sizes.length).fill(-1);
   for (let i = 0; i < w * h; i++) { const l = labels[i]; if (l && firstPixel[l] < 0) firstPixel[l] = i; }
