@@ -541,7 +541,7 @@ pub fn place_mat(deg: f64, tx: f64, ty: f64) -> Mat {
 /// caller also applies to the *image* content so it stays aligned with the border.
 pub fn normalize(p: &Poly, target_w: Option<f64>) -> (Poly, Mat) {
     let (minx, miny, maxx, _) = poly_bbox(p);
-    let s = target_w.map_or(1.0, |w| w / (maxx - minx));
+    let s = target_w.map_or(1.0, |w| if maxx - minx > 1e-9 { w / (maxx - minx) } else { 1.0 });
     let m: Mat = [s, 0.0, -s * minx, 0.0, s, -s * miny];
     let t = AffineTransform::new(m[0], m[1], m[2], m[3], m[4], m[5]);
     (p.affine_transform(&t), m)

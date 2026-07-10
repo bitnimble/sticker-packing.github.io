@@ -276,6 +276,12 @@ pub fn run_pack(
     progress("Preparing", 0.05);
     let outline = svgio::load_outline_str(border_svg)?;
     let vb = svgio::read_viewbox_str(border_svg)?;
+    // A degenerate outline (collinear / zero-area) triangulates to nothing, which would panic in
+    // buffer()/largest() and disable collision detection; reject it with a clear error instead.
+    let (ominx, ominy, omaxx, omaxy) = poly_bbox(&outline);
+    if omaxx - ominx < 1e-9 || omaxy - ominy < 1e-9 || area_poly(&outline) < 1e-9 {
+        return Err("border outline is degenerate (near-zero area or size); check the border SVG".into());
+    }
     let (norm, norm_mat) = normalize(&outline, p.sticker_width);
     let packing = simplify_poly(&norm, p.simplify);
     let grown = simplify_poly(&buffer(&packing, p.spacing / 2.0 + 1e-4, 16), p.simplify);
@@ -362,5 +368,13 @@ mod tests {
         assert!(reserve_symmetric(&plain));
         let marks = build_reserve(&Params { reg_marks: true, ..Default::default() }, 210.0, 297.0);
         assert!(!reserve_symmetric(&marks));
+    }
+
+    #[test]
+    fn degenerate_outline_errors_not_panics() {
+        // Collinear border (zero area) used to triangulate to nothing and panic in buffer()/largest().
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\" width=\"100\" height=\"100\"><path d=\"M0,0 L100,0 L50,0 Z\"/></svg>";
+        let p = Params { want_pdf: false, ..Default::default() };
+        assert!(run_pack(svg, &[], "", &p, &|_, _| {}).is_err());
     }
 }

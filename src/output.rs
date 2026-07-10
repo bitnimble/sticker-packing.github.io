@@ -245,7 +245,9 @@ fn dedupe_streams(bytes: Vec<u8>) -> Vec<u8> {
             if matches!(obj, Object::Stream(_)) {
                 let h = hash_object(obj);
                 match canonical.get(&h) {
-                    Some(&keep) => { remap.insert(id, keep); }
+                    // Confirm true equality, not just a hash collision, before merging.
+                    Some(&keep) if doc.objects.get(&keep) == Some(obj) => { remap.insert(id, keep); }
+                    Some(_) => {}
                     None => { canonical.insert(h, id); }
                 }
             }

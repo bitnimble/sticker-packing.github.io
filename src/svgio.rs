@@ -95,6 +95,7 @@ pub fn read_viewbox_str(s: &str) -> Result<[f64; 4], String> {
         .map(str::parse::<f64>)
         .collect();
     match nums.map_err(|_| "non-numeric viewBox".to_string())?.as_slice() {
+        [_, _, w, h] if !(*w > 0.0 && *h > 0.0) => Err("viewBox width and height must be positive".into()),
         [a, b, c, d] => Ok([*a, *b, *c, *d]),
         _ => Err("viewBox must have 4 numbers".into()),
     }
