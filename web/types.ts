@@ -16,6 +16,12 @@ export interface PackArgs {
   attempts: number;
   stroke: number;
   wantPdf: boolean;
+  regMarks: boolean;
+  regLengthIn: number;
+  regInsetLIn: number;
+  regInsetTIn: number;
+  regInsetRIn: number;
+  regInsetBIn: number;
 }
 
 export type ProgressFn = (stage: string, frac: number) => void;

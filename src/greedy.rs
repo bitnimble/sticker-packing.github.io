@@ -47,7 +47,7 @@ pub fn precompute(
     rotations: &[f64],
     page_w: f64,
     page_h: f64,
-    margin: f64,
+    reserve: &Reserve,
 ) -> Pre {
     let r = rotations.len();
     let parts: Vec<Poly> = rotations.iter().map(|&a| rotate_p(grown, a)).collect();
@@ -64,12 +64,21 @@ pub fn precompute(
     let ifp: Vec<Option<Multi>> = (0..r)
         .map(|i| {
             let (bminx, bminy, bmaxx, bmaxy) = poly_bbox(&parts[i]);
-            let (lox, hix) = (margin - bminx, (page_w - margin) - bmaxx);
-            let (loy, hiy) = (margin - bminy, (page_h - margin) - bmaxy);
-            if hix >= lox && hiy >= loy {
-                Some(rect(lox, loy, hix, hiy))
-            } else {
+            let (lox, hix) = (reserve.left - bminx, (page_w - reserve.right) - bmaxx);
+            let (loy, hiy) = (reserve.top - bminy, (page_h - reserve.bottom) - bmaxy);
+            if hix < lox || hiy < loy {
+                return None;
+            }
+            let mut region = rect(lox, loy, hix, hiy);
+            for ko in &reserve.rects {
+                // reference points where the part's bounding box would overlap the keep-out rect
+                let blk = rect(ko[0] - bmaxx, ko[1] - bmaxy, ko[2] - bminx, ko[3] - bminy);
+                region = region.difference(&blk);
+            }
+            if region.0.is_empty() {
                 None
+            } else {
+                Some(region)
             }
         })
         .collect();
@@ -140,11 +149,11 @@ pub fn pack(
     rotations: &[f64],
     page_w: f64,
     page_h: f64,
-    margin: f64,
+    reserve: &Reserve,
     max_count: Option<usize>,
     attempts: usize,
 ) -> Vec<Placement> {
-    let pre = precompute(grown, rotations, page_w, page_h, margin);
+    let pre = precompute(grown, rotations, page_w, page_h, reserve);
     let placeable: Vec<usize> = (0..rotations.len()).filter(|&i| pre.ifp[i].is_some()).collect();
 
     let mut configs: Vec<(Key, Option<usize>)> = KEYS.iter().map(|&k| (k, None)).collect();

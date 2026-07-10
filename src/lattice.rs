@@ -132,6 +132,16 @@ fn rot_vec(v: Vec2, c: f64, s: f64) -> Vec2 {
     (c * v.0 - s * v.1, s * v.0 + c * v.1)
 }
 
+/// One sublattice fitted to the page: reference-point inner-fit rect `(lox, hix, loy, hiy)`, the
+/// rotated lattice offset, its angle, and keep-out reference rects `(lox, hix, loy, hiy)` the
+/// reference point must avoid.
+struct Sub {
+    rect: (f64, f64, f64, f64),
+    off: Vec2,
+    ang: f64,
+    forbid: Vec<(f64, f64, f64, f64)>,
+}
+
 /// Place a lattice (one or more angle-offset sublattices sharing v1,v2) onto the page,
 /// searching global rotation + phase for the most copies fully inside page-minus-margin.
 fn fit_to_page(
@@ -141,25 +151,27 @@ fn fit_to_page(
     sublattices: &[(f64, Vec2)],
     page_w: f64,
     page_h: f64,
-    margin: f64,
+    reserve: &Reserve,
     rotations: &[f64],
     phases: usize,
 ) -> Vec<Placement> {
     par::map_slice(rotations, |&a| {
             let (s, c) = a.to_radians().sin_cos();
             let (w1, w2) = (rot_vec(v1, c, s), rot_vec(v2, c, s));
-            // per-sublattice inner-fit rect + rotated offset
-            let mut subs: Vec<((f64, f64, f64, f64), Vec2, f64)> = Vec::new();
+            // per-sublattice inner-fit rect + rotated offset + keep-out reference rects
+            let mut subs: Vec<Sub> = Vec::new();
             let mut ok = true;
             for &(dangle, doff) in sublattices {
                 let ang = (a + dangle).rem_euclid(360.0);
                 let (minx, miny, maxx, maxy) = poly_bbox(&rotate_p(grown, ang));
-                let rect = (margin - minx, (page_w - margin) - maxx, margin - miny, (page_h - margin) - maxy);
+                let rect = (reserve.left - minx, (page_w - reserve.right) - maxx, reserve.top - miny, (page_h - reserve.bottom) - maxy);
                 if rect.1 < rect.0 || rect.3 < rect.2 {
                     ok = false;
                     break;
                 }
-                subs.push((rect, rot_vec(doff, c, s), ang));
+                // reference points where the part's bbox would overlap a keep-out rect
+                let forbid = reserve.rects.iter().map(|k| (k[0] - maxx, k[2] - minx, k[1] - maxy, k[3] - miny)).collect();
+                subs.push(Sub { rect, off: rot_vec(doff, c, s), ang, forbid });
             }
             if !ok {
                 return Vec::new();
@@ -171,10 +183,10 @@ fn fit_to_page(
             }
             // i,j range covering all rects (corners minus offsets), expanded by one cell.
             let (mut imn, mut imx, mut jmn, mut jmx) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
-            for (rect, off, _) in &subs {
-                for &cx in &[rect.0, rect.1] {
-                    for &cy in &[rect.2, rect.3] {
-                        let (px, py) = (cx - off.0, cy - off.1);
+            for sub in &subs {
+                for &cx in &[sub.rect.0, sub.rect.1] {
+                    for &cy in &[sub.rect.2, sub.rect.3] {
+                        let (px, py) = (cx - sub.off.0, cy - sub.off.1);
                         let i = (w2.1 * px - w2.0 * py) / dt;
                         let j = (-w1.1 * px + w1.0 * py) / dt;
                         imn = imn.min(i); imx = imx.max(i);
@@ -195,12 +207,14 @@ fn fit_to_page(
                     let (fx, fy) = (pf as f64 / phases as f64, qf as f64 / phases as f64);
                     let o = (fx * w1.0 + fy * w2.0, fx * w1.1 + fy * w2.1);
                     let mut placed: Vec<Placement> = Vec::new();
-                    for (rect, off, ang) in &subs {
-                        let (ox, oy) = (o.0 + off.0, o.1 + off.1);
+                    for sub in &subs {
+                        let (ox, oy) = (o.0 + sub.off.0, o.1 + sub.off.1);
                         for p in &pts0 {
                             let (x, y) = (p.0 + ox, p.1 + oy);
-                            if x >= rect.0 && x <= rect.1 && y >= rect.2 && y <= rect.3 {
-                                placed.push(Placement { angle: *ang, x, y });
+                            if x >= sub.rect.0 && x <= sub.rect.1 && y >= sub.rect.2 && y <= sub.rect.3
+                                && !sub.forbid.iter().any(|f| x >= f.0 && x <= f.1 && y >= f.2 && y <= f.3)
+                            {
+                                placed.push(Placement { angle: sub.ang, x, y });
                             }
                         }
                     }
@@ -222,15 +236,15 @@ pub fn pack(
     rotations: &[f64],
     page_w: f64,
     page_h: f64,
-    margin: f64,
+    reserve: &Reserve,
     max_count: Option<usize>,
 ) -> Vec<Placement> {
     let area = area_poly(grown);
     let (v1, v2) = densest_lattice(&collision_body(grown), area, 180);
-    let single = fit_to_page(grown, v1, v2, &[(0.0, (0.0, 0.0))], page_w, page_h, margin, rotations, 12);
+    let single = fit_to_page(grown, v1, v2, &[(0.0, (0.0, 0.0))], page_w, page_h, reserve, rotations, 12);
 
     let (dv1, dv2, t) = double_lattice(grown, area);
-    let double = fit_to_page(grown, dv1, dv2, &[(0.0, (0.0, 0.0)), (180.0, t)], page_w, page_h, margin, rotations, 12);
+    let double = fit_to_page(grown, dv1, dv2, &[(0.0, (0.0, 0.0)), (180.0, t)], page_w, page_h, reserve, rotations, 12);
 
     let mut best = if single.len() >= double.len() { single } else { double };
     best.sort_by(|a, b| (a.y, a.x).partial_cmp(&(b.y, b.x)).unwrap());

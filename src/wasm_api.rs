@@ -79,6 +79,12 @@ pub fn pack(
     greedy_attempts: u32,
     stroke: f64,
     want_pdf: bool,
+    reg_marks: bool,
+    reg_length_in: f64,
+    reg_inset_l_in: f64,
+    reg_inset_t_in: f64,
+    reg_inset_r_in: f64,
+    reg_inset_b_in: f64,
     on_progress: js_sys::Function,
 ) -> Result<PackResult, JsValue> {
     let p = Params {
@@ -95,6 +101,12 @@ pub fn pack(
         greedy_attempts: greedy_attempts as usize,
         stroke,
         want_pdf,
+        reg_marks,
+        reg_length_in,
+        reg_inset_l_in,
+        reg_inset_t_in,
+        reg_inset_r_in,
+        reg_inset_b_in,
     };
     let progress = |stage: &str, frac: f64| {
         let _ = on_progress.call2(&JsValue::NULL, &JsValue::from_str(stage), &JsValue::from_f64(frac));

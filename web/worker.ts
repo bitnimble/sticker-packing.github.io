@@ -20,7 +20,9 @@ ctx.onmessage = async (e: MessageEvent<WorkerIn>) => {
     const res = pack(
       a.border, a.imageBytes, a.imageExt, a.width, a.pageW, a.pageH,
       a.margin, a.spacing, a.method, a.rotations, a.maxCount, a.simplify,
-      a.attempts, a.stroke, a.wantPdf, onProgress,
+      a.attempts, a.stroke, a.wantPdf,
+      a.regMarks, a.regLengthIn, a.regInsetLIn, a.regInsetTIn, a.regInsetRIn, a.regInsetBIn,
+      onProgress,
     );
     const out: WorkerOut = {
       type: 'result',

@@ -82,6 +82,7 @@ fn run(args: Args) -> Result<(), String> {
         greedy_attempts: args.greedy_attempts,
         stroke: args.stroke,
         want_pdf: !args.svg_only,
+        ..Default::default()
     };
 
     let t0 = Instant::now();

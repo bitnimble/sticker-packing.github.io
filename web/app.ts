@@ -269,6 +269,9 @@ function num(id: string, fallback: number): number {
 $('pagesize').addEventListener('change', () => {
   $('customPage').style.display = $<HTMLSelectElement>('pagesize').value === 'custom' ? 'grid' : 'none';
 });
+$('regMarks').addEventListener('change', () => {
+  $('regOpts').style.display = $<HTMLInputElement>('regMarks').checked ? 'grid' : 'none';
+});
 function pageDims(): [number, number] {
   const v = $<HTMLSelectElement>('pagesize').value;
   if (v !== 'custom') { const [w, h] = v.split('x').map(Number); return [w, h]; }
@@ -316,6 +319,12 @@ $('run').addEventListener('click', async () => {
       attempts: Math.max(1, Math.round(num('attempts', 8))),
       stroke: num('stroke', 0.1),
       wantPdf,
+      regMarks: $<HTMLInputElement>('regMarks').checked,
+      regLengthIn: num('regLength', 0.787),
+      regInsetLIn: num('regInsetL', 0.625),
+      regInsetTIn: num('regInsetT', 0.625),
+      regInsetRIn: num('regInsetR', 0.625),
+      regInsetBIn: num('regInsetB', 0.625),
     };
     const res = await runInWorker(args, (stage, frac) => {
       $('bar').style.width = Math.round(frac * 100) + '%';

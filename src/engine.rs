@@ -17,6 +17,13 @@ pub struct Params {
     pub greedy_attempts: usize,
     pub stroke: f64,
     pub want_pdf: bool,
+    /// Reserve keep-out zones for Silhouette-style registration marks (inputs in inches).
+    pub reg_marks: bool,
+    pub reg_length_in: f64,
+    pub reg_inset_l_in: f64,
+    pub reg_inset_t_in: f64,
+    pub reg_inset_r_in: f64,
+    pub reg_inset_b_in: f64,
 }
 
 impl Default for Params {
@@ -35,8 +42,39 @@ impl Default for Params {
             greedy_attempts: 16,
             stroke: 0.1,
             want_pdf: true,
+            reg_marks: false,
+            reg_length_in: 0.787,
+            reg_inset_l_in: 0.625,
+            reg_inset_t_in: 0.625,
+            reg_inset_r_in: 0.625,
+            reg_inset_b_in: 0.625,
         }
     }
+}
+
+/// Build the page keep-out reservation for the (already landscape-swapped) page. With marks off
+/// this is just the uniform page margin; with marks on, each side clears the larger of the margin
+/// and its registration inset, and the three Cameo corner marks (solid top-left square + L-brackets
+/// top-right and bottom-left) reserve a `length x length` square each.
+fn build_reserve(p: &Params, pw: f64, ph: f64) -> Reserve {
+    let m = p.margin;
+    if !p.reg_marks {
+        return Reserve { left: m, top: m, right: m, bottom: m, rects: Vec::new() };
+    }
+    const MM_PER_IN: f64 = 25.4;
+    let (il, it, ir, ib) = (
+        p.reg_inset_l_in * MM_PER_IN,
+        p.reg_inset_t_in * MM_PER_IN,
+        p.reg_inset_r_in * MM_PER_IN,
+        p.reg_inset_b_in * MM_PER_IN,
+    );
+    let len = p.reg_length_in * MM_PER_IN;
+    let rects = vec![
+        [il, it, il + len, it + len],           // top-left solid square
+        [pw - ir - len, it, pw - ir, it + len], // top-right bracket
+        [il, ph - ib - len, il + len, ph - ib], // bottom-left bracket
+    ];
+    Reserve { left: m.max(il), top: m.max(it), right: m.max(ir), bottom: m.max(ib), rects }
 }
 
 /// Common page presets in mm (portrait). Returns None for unknown names.
@@ -206,21 +244,22 @@ pub fn run_pack(
 
     let n = p.rotations.max(1);
     let rots: Vec<f64> = (0..n).map(|i| (i as f64 * 360.0 / n as f64 * 1e6).round() / 1e6).collect();
+    let reserve = build_reserve(p, pw, ph);
 
     let placements = match p.method.as_str() {
         "greedy" => {
             progress("Packing (greedy)", 0.15);
-            greedy::pack(&grown, &rots, pw, ph, p.margin, p.max_count, p.greedy_attempts)
+            greedy::pack(&grown, &rots, pw, ph, &reserve, p.max_count, p.greedy_attempts)
         }
         "lattice" => {
             progress("Packing (lattice)", 0.15);
-            lattice::pack(&grown, &rots, pw, ph, p.margin, p.max_count)
+            lattice::pack(&grown, &rots, pw, ph, &reserve, p.max_count)
         }
         "both" => {
             progress("Packing (greedy)", 0.15);
-            let g = greedy::pack(&grown, &rots, pw, ph, p.margin, p.max_count, p.greedy_attempts);
+            let g = greedy::pack(&grown, &rots, pw, ph, &reserve, p.max_count, p.greedy_attempts);
             progress("Packing (lattice)", 0.5);
-            let l = lattice::pack(&grown, &rots, pw, ph, p.margin, p.max_count);
+            let l = lattice::pack(&grown, &rots, pw, ph, &reserve, p.max_count);
             if g.len() >= l.len() { g } else { l }
         }
         m => return Err(format!("unknown method '{m}' (both|greedy|lattice)")),

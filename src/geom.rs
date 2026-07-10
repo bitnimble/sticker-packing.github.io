@@ -10,6 +10,18 @@ use std::f64::consts::PI;
 pub type Poly = Polygon<f64>;
 pub type Multi = MultiPolygon<f64>;
 
+/// Page placement constraints: per-side clear borders (mm from each edge, already the larger of
+/// the page margin and any registration inset) plus keep-out rectangles the placed part must not
+/// overlap (registration-mark corner zones). `rects` are `[x0, y0, x1, y1]` in page coordinates.
+#[derive(Clone, Default)]
+pub struct Reserve {
+    pub left: f64,
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub rects: Vec<[f64; 4]>,
+}
+
 pub fn poly_from(pts: &[(f64, f64)]) -> Poly {
     Polygon::new(
         LineString::new(pts.iter().map(|&(x, y)| coord! {x: x, y: y}).collect()),
