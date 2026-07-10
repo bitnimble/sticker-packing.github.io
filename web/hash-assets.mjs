@@ -22,10 +22,10 @@ const wasm = emit(`sticker_packer_bg.${hash(read('sticker_packer_bg.wasm'))}.was
 const workerSrc = read('worker.js').toString().replaceAll('sticker_packer_bg.wasm', wasm);
 const worker = emit(`worker.${hash(workerSrc)}.js`, workerSrc);
 
-const appSrc = read('app.js').toString().replaceAll('sticker_packer_bg.wasm', wasm).replace('./worker.js', `./${worker}`);
+const appSrc = read('app.js').toString().replaceAll('sticker_packer_bg.wasm', wasm).replaceAll('./worker.js', `./${worker}`);
 const app = emit(`app.${hash(appSrc)}.js`, appSrc);
 
-emit('index.html', read('index.html').toString().replace('./app.js', `./${app}`));
+emit('index.html', read('index.html').toString().replaceAll('./app.js', `./${app}`));
 copyFileSync(join(webDir, 'favicon.svg'), join(outDir, 'favicon.svg'));
 writeFileSync(join(outDir, '.nojekyll'), '');
 
