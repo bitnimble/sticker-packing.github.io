@@ -234,7 +234,7 @@ pub fn collision_body(p: &Poly) -> Multi {
 
 /// Corner treatment for an outward offset. External = convex (bulges away from the shape),
 /// internal = concave (notches toward it).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum JoinStyle {
     /// Round the external corners, keep internal corners sharp (natural disk dilation).
     RoundExternal,
@@ -243,6 +243,8 @@ pub enum JoinStyle {
     /// Miter every corner (no rounding).
     SharpAll,
 }
+
+const MIN_CORNER_CLEARANCE_FRACTION: f64 = 0.5;
 
 fn unit(x: f64, y: f64) -> (f64, f64) {
     let l = (x * x + y * y).sqrt();
@@ -285,7 +287,8 @@ fn ccw(mut c: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
 
 /// Round a ring's corners: external (convex) by `convex_r`, internal (concave) by `concave_r`
 /// (each clamped per corner to half the adjacent edges). Applied to the silhouette before offsetting.
-fn fillet_corners(pts: &[[f64; 2]], convex_r: f64, concave_r: f64) -> Vec<[f64; 2]> {
+/// A convex fillet never trims more than `max_cut` off its corner.
+fn fillet_corners(pts: &[[f64; 2]], convex_r: f64, concave_r: f64, max_cut: f64) -> Vec<[f64; 2]> {
     let n = pts.len();
     if n < 3 || (convex_r <= 0.0 && concave_r <= 0.0) {
         return pts.to_vec();
@@ -299,7 +302,13 @@ fn fillet_corners(pts: &[[f64; 2]], convex_r: f64, concave_r: f64) -> Vec<[f64; 
         let din = unit(v[0] - p[0], v[1] - p[1]);
         let dout = unit(q[0] - v[0], q[1] - v[1]);
         let delta = (din.0 * dout.1 - din.1 * dout.0).atan2(din.0 * dout.0 + din.1 * dout.1);
-        let r = if delta * orient > 0.0 { convex_r } else { concave_r };
+        let r = if delta * orient > 0.0 {
+            // fillet of radius r trims r/h - r off the corner (h = sin of half the interior angle)
+            let h = (delta.abs() / 2.0).cos();
+            convex_r.min(max_cut * h / (1.0 - h))
+        } else {
+            concave_r
+        };
         if delta.abs() < 1e-6 || r <= 0.0 {
             out.push(v); // straight, or not rounding this corner type
             continue;
@@ -321,10 +330,15 @@ fn fillet_corners(pts: &[[f64; 2]], convex_r: f64, concave_r: f64) -> Vec<[f64; 
         let d = a1 - a0;
         let sweep = d.sin().atan2(d.cos());
         let steps = ((delta.abs() / (PI / 16.0)).ceil() as usize).max(1);
-        for k in 0..=steps {
-            let ang = a0 + sweep * (k as f64 / steps as f64);
-            out.push([c[0] + r_eff * ang.cos(), c[1] + r_eff * ang.sin()]);
+        let step = sweep / steps as f64;
+        // circumscribed, not inscribed: chords inside a large-radius arc would trim past max_cut
+        let r_out = r_eff / (step / 2.0).cos();
+        out.push(t_in);
+        for k in 0..steps {
+            let ang = a0 + step * (k as f64 + 0.5);
+            out.push([c[0] + r_out * ang.cos(), c[1] + r_out * ang.sin()]);
         }
+        out.push(t_out);
     }
     out
 }
@@ -351,7 +365,8 @@ pub fn offset_outline_multi(input: &[Vec<[f64; 2]>], m: f64, round_radius: f64, 
     let concave_r = if style == JoinStyle::RoundAll { round_radius + 2.0 * m } else { 0.0 };
     let filleted: Vec<Vec<[f64; 2]>>;
     let rings: &[Vec<[f64; 2]>] = if round_radius > 0.0 || concave_r > 0.0 {
-        filleted = input.iter().map(|r| fillet_corners(r, round_radius, concave_r)).collect();
+        let max_cut = m * (1.0 - MIN_CORNER_CLEARANCE_FRACTION);
+        filleted = input.iter().map(|r| fillet_corners(r, round_radius, concave_r, max_cut)).collect();
         &filleted
     } else {
         input
@@ -561,4 +576,35 @@ pub fn normalize(p: &Poly, target_w: Option<f64>) -> (Poly, Mat) {
 /// Apply a 2x3 matrix to a polygon.
 pub fn transform_poly(p: &Poly, m: &Mat) -> Poly {
     p.affine_transform(&AffineTransform::new(m[0], m[1], m[2], m[3], m[4], m[5]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use geo::{Distance, Euclidean};
+
+    fn clearance(outline: &Multi, p: [f64; 2]) -> f64 {
+        let pt = Point::new(p[0], p[1]);
+        let d = outline.0.iter().map(|poly| Euclidean::distance(&pt, poly.exterior())).fold(f64::MAX, f64::min);
+        if outline.contains(&pt) { d } else { -d }
+    }
+
+    #[test]
+    fn max_roundness_keeps_min_corner_clearance() {
+        // 90° corners plus a 53° tip, which an uncapped fillet cuts straight through
+        let art = vec![vec![[0.0, 0.0], [70.0, 0.0], [110.0, 20.0], [70.0, 40.0], [0.0, 40.0]]];
+        let m = 4.0;
+        let min_clearance = 2.0;
+        for style in [JoinStyle::RoundExternal, JoinStyle::RoundAll] {
+            let outline = offset_outline_multi(&art, m, 100.0, style);
+            for &v in &art[0] {
+                let c = clearance(&outline, v);
+                assert!(c >= min_clearance - 0.02, "{style:?}: vertex {v:?} clearance {c} < {min_clearance}");
+            }
+            // corners still round past the plain margin, down to the floor
+            let d = 3.0 / 2f64.sqrt();
+            assert!(clearance(&outline, [-d, -d]) < 0.0, "90° corner not rounded beyond the margin");
+            assert!(clearance(&outline, [113.0, 20.0]) < 0.0, "tip not rounded beyond the margin");
+        }
+    }
 }
