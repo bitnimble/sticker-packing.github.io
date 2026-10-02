@@ -320,7 +320,8 @@ function pageDims(): [number, number] {
 }
 
 function setLink(container: HTMLElement, filename: string, blob: Blob): void {
-  const url = URL.createObjectURL(blob);
+  // octet-stream: Firefox otherwise opens a pdf/svg in a tab despite `download`
+  const url = URL.createObjectURL(new Blob([blob], { type: 'application/octet-stream' }));
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
