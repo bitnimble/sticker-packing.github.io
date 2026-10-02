@@ -1,7 +1,7 @@
-// Main-thread UI. Live preview runs here (fast, synchronous); packing runs in a Web Worker.
-import init, { preview, auto_outline } from './sticker_packer.js';
+import init, { preview, AutoOutline } from './sticker_packer.js';
 import { traceBase, traceFinish, type Traced, type BaseRaster } from './trace.js';
-import type { PackArgs, ProgressFn, WorkerOut, WorkerResult } from './types.js';
+import { PackerPool } from './pool.js';
+import { errorMessage, type AutoOutlineArgs, type PackArgs } from './types.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 const setStatus = (msg: string, cls = ''): void => {
@@ -11,53 +11,40 @@ const setStatus = (msg: string, cls = ''): void => {
 };
 
 interface BorderFile { text: string; url: string; }
-interface ImageFile { bytes: Uint8Array; ext: string; url: string | null; }
+interface ImageFile { bytes: Uint8Array; ext: string; url: string | null; name: string; }
 
 let border: BorderFile | null = null; // active border (manual upload or auto-generated)
 let manualBorder: BorderFile | null = null;
-let image: ImageFile = { bytes: new Uint8Array(0), ext: '', url: null };
+let image: ImageFile = { bytes: new Uint8Array(0), ext: '', url: null, name: '' };
 let traced: Traced | null = null; // silhouette of the current art, for auto-outline
 let base: BaseRaster | null = null; // cached rasterize+mask for the current art (radius-independent)
 let previewReady = false;
-let workerReady = false;
+let packerReady = false;
+let packing = false;
 
-// --- packing worker -------------------------------------------------------
+// --- packing workers ------------------------------------------------------
+const POOL_MAX_WORKERS = 8;
 // Guarded so a worker-construction failure can't stop the file inputs from wiring up.
-let worker: Worker | null = null;
+let pool: PackerPool | null = null;
 try {
-  worker = new Worker('./worker.js', { type: 'module' });
-  worker.addEventListener('message', (e: MessageEvent<WorkerOut>) => {
-    if (e.data.type === 'ready') { workerReady = true; maybeReady(); }
-    if (e.data.type === 'init-error') setStatus('Failed to load engine: ' + e.data.message, 'err');
-  });
+  pool = new PackerPool(Math.max(1, Math.min(POOL_MAX_WORKERS, (navigator.hardwareConcurrency || 2) - 1)));
+  pool.ready.then(
+    () => { packerReady = true; maybeReady(); },
+    (e: unknown) => setStatus('Failed to load engine: ' + errorMessage(e), 'err'),
+  );
 } catch (e: unknown) {
-  setStatus('Failed to start worker: ' + String((e as Error)?.message ?? e), 'err');
-}
-
-function runInWorker(args: PackArgs, onProgress: ProgressFn): Promise<WorkerResult> {
-  if (!worker) return Promise.reject(new Error('packing worker is unavailable'));
-  const w = worker;
-  return new Promise((resolve, reject) => {
-    const handler = (e: MessageEvent<WorkerOut>) => {
-      const m = e.data;
-      if (m.type === 'progress') onProgress(m.stage, m.frac);
-      else if (m.type === 'result') { w.removeEventListener('message', handler); resolve(m); }
-      else if (m.type === 'error') { w.removeEventListener('message', handler); reject(new Error(m.message)); }
-    };
-    w.addEventListener('message', handler);
-    w.postMessage({ type: 'pack', args });
-  });
+  setStatus('Failed to start worker: ' + errorMessage(e), 'err');
 }
 
 init()
   .then(() => { previewReady = true; maybeReady(); updatePreview(); })
-  .catch((e: unknown) => setStatus('Failed to load engine: ' + e, 'err'));
+  .catch((e: unknown) => setStatus('Failed to load engine: ' + errorMessage(e), 'err'));
 
 function maybeReady(): void {
-  if (previewReady && workerReady) { $<HTMLButtonElement>('run').disabled = !border; setStatus('Ready.', 'ok'); }
+  if (previewReady && packerReady) { maybeEnable(); setStatus('Ready.', 'ok'); }
 }
 function maybeEnable(): void {
-  $<HTMLButtonElement>('run').disabled = !(previewReady && workerReady && border);
+  $<HTMLButtonElement>('run').disabled = !(previewReady && packerReady && border) || packing;
 }
 
 // --- live preview (main thread) ------------------------------------------
@@ -95,7 +82,7 @@ function updatePreview(): void {
   } catch (e: unknown) {
     box.innerHTML = '';
     box.style.display = 'none';
-    err.textContent = String((e as Error)?.message ?? e);
+    err.textContent = errorMessage(e);
     err.style.display = 'block';
   }
   $('previewPanel').style.display = 'block';
@@ -158,7 +145,7 @@ wireDrop('imageDrop', 'imageFile', 'imageCard', async (file) => {
   const old = image.url;
   const mime = ext === 'svg' ? 'image/svg+xml' : file.type || 'application/octet-stream';
   const url = URL.createObjectURL(new Blob([buf], { type: mime }));
-  image = { bytes: buf, ext, url };
+  image = { bytes: buf, ext, url, name: file.name.replace(/\.[^.]*$/, '') };
   base = null;
   showCard('image', url, file.name);
   await onArtChanged();
@@ -166,7 +153,7 @@ wireDrop('imageDrop', 'imageFile', 'imageCard', async (file) => {
 });
 $('imageClear').addEventListener('click', () => {
   if (image.url) URL.revokeObjectURL(image.url);
-  image = { bytes: new Uint8Array(0), ext: '', url: null };
+  image = { bytes: new Uint8Array(0), ext: '', url: null, name: '' };
   traced = null;
   base = null;
   previewCache.clear();
@@ -185,25 +172,36 @@ function clearAutoBorder(): void {
   border = null;
 }
 function genOutline(style: string): string {
-  if (!traced) throw new Error('no traced art');
-  // autoMargin is in mm; the silhouette is in the art's viewBox units. Convert via the sticker
-  // width (blank => viewBox units are treated as mm 1:1 by the packer).
-  const marginMm = num('autoMargin', 2);
-  const stickerW = num('width', 0);
-  const margin = stickerW > 0 ? marginMm * (traced.vb[2] / stickerW) : marginMm;
-  // Roundness (0-100): extra convex-corner rounding, as a fraction of the shape size.
-  const roundness = num('autoRound', 0);
-  const roundRadius = (roundness / 100) * 0.12 * Math.min(traced.vb[2], traced.vb[3]);
-  const key = style + ':' + marginMm + ':' + stickerW + ':' + roundness;
+  const stickerW = widthRange()[1];
+  const key = style + ':' + num('autoMargin', 2) + ':' + stickerW + ':' + num('autoRound', 0);
   const hit = previewCache.get(key);
   if (hit) return hit;
+  const a = autoOutlineArgs(style);
+  const outline = new AutoOutline(a.points, a.lengths, ...a.vb, a.marginMm, a.roundRadius, a.style, a.stroke);
+  try {
+    const svg = outline.svg(stickerW);
+    previewCache.set(key, svg);
+    return svg;
+  } finally {
+    outline.free();
+  }
+}
+function autoOutlineArgs(style: string): AutoOutlineArgs {
+  if (!traced) throw new Error('no traced art');
+  // Roundness (0-100): extra convex-corner rounding, as a fraction of the shape size.
+  const roundRadius = (num('autoRound', 0) / 100) * 0.12 * Math.min(traced.vb[2], traced.vb[3]);
   const flat: number[] = [];
   const lengths: number[] = [];
   for (const c of traced.contours) { lengths.push(c.length / 2); for (const v of c) flat.push(v); }
-  const stroke = Math.max(traced.vb[2], traced.vb[3]) / 150;
-  const svg = auto_outline(new Float64Array(flat), new Uint32Array(lengths), traced.vb[0], traced.vb[1], traced.vb[2], traced.vb[3], margin, roundRadius, style, stroke);
-  previewCache.set(key, svg);
-  return svg;
+  return {
+    points: new Float64Array(flat),
+    lengths: new Uint32Array(lengths),
+    vb: traced.vb,
+    marginMm: num('autoMargin', 2),
+    roundRadius,
+    style,
+    stroke: Math.max(traced.vb[2], traced.vb[3]) / 150,
+  };
 }
 // Simplification (0-100) as a 0..1 amount: outward-only, amplitude-ordered smoothing of the
 // silhouette -- shallow wiggles smooth away first, prominent notches survive, outline only grows.
@@ -230,7 +228,7 @@ function regenAuto(): void {
     border = { text: svg, url: URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })) };
     err.style.display = 'none';
   } catch (e) {
-    err.textContent = String((e as Error)?.message ?? e);
+    err.textContent = errorMessage(e);
     err.style.display = 'block';
   }
   maybeEnable();
@@ -263,7 +261,28 @@ function debounce(fn: () => unknown, ms: number): () => void {
   return () => { clearTimeout(t); t = setTimeout(fn, ms); };
 }
 $('autoMargin').addEventListener('input', () => { previewCache.clear(); regenAuto(); });
-$('width').addEventListener('input', () => { previewCache.clear(); regenAuto(); });
+function widthRange(): [number, number] {
+  return [num('widthMin', 50), num('widthMax', 70)];
+}
+function syncWidth(moved: HTMLInputElement): void {
+  const lo = $<HTMLInputElement>('widthMin');
+  const hi = $<HTMLInputElement>('widthMax');
+  if (+lo.value > +hi.value) (moved === lo ? hi : lo).value = moved.value;
+  const [a, b] = widthRange();
+  $('widthReadout').textContent = a === b ? `${a} mm` : `${a}–${b} mm`;
+  const pos = (v: number): number => (v - +lo.min) / (+lo.max - +lo.min);
+  // equal thumbs stack: put the one with more room to move on top
+  lo.style.zIndex = a === b && pos(a) > 0.5 ? '1' : '';
+  const fill = $('widthFill');
+  fill.style.left = `calc(8px + (100% - 16px) * ${pos(a)})`;
+  fill.style.width = `calc((100% - 16px) * ${pos(b) - pos(a)})`;
+}
+const regenAutoDebounced = debounce(regenAuto, 150);
+for (const id of ['widthMin', 'widthMax']) {
+  const el = $<HTMLInputElement>(id);
+  el.addEventListener('input', () => { syncWidth(el); regenAutoDebounced(); });
+}
+syncWidth($<HTMLInputElement>('widthMax'));
 $('autoRound').addEventListener('input', debounce(() => { previewCache.clear(); regenAuto(); }, 150));
 $('autoSimplify').addEventListener('input', debounce(async () => { await traceCurrentArt(); regenAuto(); }, 150));
 document.querySelectorAll('input[name=autostyle]').forEach((r) => r.addEventListener('change', regenAuto));
@@ -319,7 +338,7 @@ function setLink(container: HTMLElement, filename: string, blob: Blob): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
-  a.textContent = '↓ ' + filename.replace('stickers_', '');
+  a.textContent = '↓ ' + filename;
   container.appendChild(a);
 }
 
@@ -338,12 +357,28 @@ function clearResults(): void {
   }
   $('contentDl').innerHTML = '';
   $('outlineDl').innerHTML = '';
+  $('sweep').innerHTML = '';
+}
+
+function sweepSummary(sweep: Array<[number, number]>, best: number | undefined): string {
+  const runs: Array<[number, number, number]> = [];
+  for (const [w, count] of sweep) {
+    const last = runs[runs.length - 1];
+    if (last && last[2] === count) last[1] = w;
+    else runs.push([w, w, count]);
+  }
+  return runs
+    .map(([from, to, count]) => {
+      const text = `${from === to ? from : `${from}–${to}`} mm: ${count}`;
+      return best != null && from <= best && best <= to ? `<b>${text}</b>` : text;
+    })
+    .join(' · ');
 }
 
 $('run').addEventListener('click', async () => {
-  if (!border) return;
-  const runBtn = $<HTMLButtonElement>('run');
-  runBtn.disabled = true;
+  if (!border || packing) return;
+  packing = true;
+  maybeEnable();
   clearResults();
   setStatus('');
   $('progress').style.display = 'block';
@@ -354,11 +389,14 @@ $('run').addEventListener('click', async () => {
     const wantPdf = $<HTMLInputElement>('pdf').checked;
     const [pageW, pageH] = pageDims();
     const regInset = num('regInset', 0.4);
+    const [widthMin, widthMax] = widthRange();
     const args: PackArgs = {
       border: border.text,
+      auto: autoEnabled() ? autoOutlineArgs(currentStyle()) : null,
       imageBytes: image.bytes,
       imageExt: image.ext,
-      width: num('width', 0) || 0,
+      widthMin,
+      widthMax,
       pageW,
       pageH,
       margin: num('margin', 5),
@@ -381,30 +419,33 @@ $('run').addEventListener('click', async () => {
       regInsetRIn: num('regInsetR', regInset),
       regInsetBIn: num('regInsetB', regInset),
     };
-    const res = await runInWorker(args, (stage, frac) => {
+    if (!pool) throw new Error('packing worker is unavailable');
+    const res = await pool.pack(args, (stage, frac) => {
       $('bar').style.width = Math.round(frac * 100) + '%';
       $('progText').textContent = stage + '…';
     });
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     $('progress').style.display = 'none';
-    setStatus(`Packed ${res.count} stickers in ${secs}s.`, 'ok');
+    const swept = res.sweep.length > 1;
+    setStatus(`Packed ${res.count} stickers${swept ? ` at ${res.width} mm` : ''} in ${secs}s.`, 'ok');
+    $('sweep').innerHTML = swept ? 'Per sheet by width: ' + sweepSummary(res.sweep, res.width) : '';
 
     const contentBlob = new Blob([res.contentSvg], { type: 'image/svg+xml' });
     const outlineBlob = new Blob([res.outlineSvg], { type: 'image/svg+xml' });
     $<HTMLImageElement>('contentImg').src = URL.createObjectURL(contentBlob);
     $<HTMLImageElement>('outlineImg').src = URL.createObjectURL(outlineBlob);
-    $('contentDl').innerHTML = '';
-    $('outlineDl').innerHTML = '';
-    setLink($('contentDl'), 'stickers_content.svg', contentBlob);
-    setLink($('outlineDl'), 'stickers_outline.svg', outlineBlob);
+    const stem = image.name || 'stickers';
+    setLink($('contentDl'), stem + '_content.svg', contentBlob);
+    setLink($('outlineDl'), stem + '_outline.svg', outlineBlob);
     if (wantPdf) {
-      setLink($('contentDl'), 'stickers_content.pdf', new Blob([res.contentPdf as BlobPart], { type: 'application/pdf' }));
-      setLink($('outlineDl'), 'stickers_outline.pdf', new Blob([res.outlinePdf as BlobPart], { type: 'application/pdf' }));
+      setLink($('contentDl'), stem + '_content.pdf', new Blob([res.contentPdf as BlobPart], { type: 'application/pdf' }));
+      setLink($('outlineDl'), stem + '_outline.pdf', new Blob([res.outlinePdf as BlobPart], { type: 'application/pdf' }));
     }
     $('results').classList.add('show');
   } catch (e: unknown) {
     $('progress').style.display = 'none';
-    setStatus('Error: ' + ((e as Error)?.message ?? e), 'err');
+    setStatus('Error: ' + errorMessage(e), 'err');
   }
-  runBtn.disabled = false;
+  packing = false;
+  maybeEnable();
 });

@@ -23,8 +23,8 @@ cp pkg/sticker_packer.js pkg/sticker_packer_bg.wasm web/
 python3 -m http.server -d web 8000   # then open http://localhost:8000
 ```
 
-It's single-threaded (no `SharedArrayBuffer`), so no COOP/COEP headers are required, plain
-static hosting works.
+Width sweeps run across several Web Workers, each with its own engine instance (no
+`SharedArrayBuffer`), so no COOP/COEP headers are required, plain static hosting works.
 
 ### Deploy to GitHub Pages
 
@@ -52,6 +52,7 @@ Omit `--image` for single-SVG mode (the border is the art). Key flags:
 |------|---------|
 | `--border` / `--image` | packing outline / artwork (SVG or png/jpg/bmp/gif/webp) |
 | `--sticker-width` | scale each sticker to N mm (default: use SVG units) |
+| `--max-sticker-width` | sweep widths from `--sticker-width` up to N mm in 1mm steps, keeping the largest width that packs the most |
 | `--page` | `a3\|a4\|a5\|a6\|letter\|legal\|tabloid` (or `--page-width`/`--page-height` in mm) |
 | `--landscape` | swap page dimensions |
 | `--margin` / `--spacing` | page bleed / gap between stickers (mm) |

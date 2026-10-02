@@ -1,5 +1,5 @@
 use clap::Parser;
-use sticker_packer::engine::{run_pack, Params};
+use sticker_packer::engine::{run_pack, Border, Params};
 use std::time::Instant;
 
 #[derive(Parser)]
@@ -17,6 +17,10 @@ struct Args {
     out: Option<String>,
     #[arg(long = "sticker-width")]
     sticker_width: Option<f64>,
+    /// Sweep widths from --sticker-width up to this (1mm steps), keeping the largest width that
+    /// packs the most stickers.
+    #[arg(long = "max-sticker-width", requires = "sticker_width")]
+    max_sticker_width: Option<f64>,
     #[arg(long, default_value_t = 5.0)]
     margin: f64,
     #[arg(long, default_value_t = 1.5)]
@@ -79,7 +83,7 @@ fn run(args: Args) -> Result<(), String> {
     let (preset_w, preset_h) = sticker_packer::engine::page_preset(&args.page)
         .ok_or_else(|| format!("unknown --page '{}' (a3|a4|a5|a6|letter|legal|tabloid)", args.page))?;
     let params = Params {
-        sticker_width: args.sticker_width,
+        sticker_width: args.sticker_width.map(|w| (w, args.max_sticker_width.unwrap_or(w))),
         page_w: args.page_width.unwrap_or(preset_w),
         page_h: args.page_height.unwrap_or(preset_h),
         margin: args.margin,
@@ -104,8 +108,20 @@ fn run(args: Args) -> Result<(), String> {
     };
 
     let t0 = Instant::now();
-    let out = run_pack(&border_svg, &image_bytes, &image_ext, &params, &|stage, _| eprintln!("  {stage}..."))?;
+    let out = run_pack(Border::Svg(&border_svg), &image_bytes, &image_ext, &params, &|stage, _| eprintln!("  {stage}..."))?;
     eprintln!("packed {} in {:.2}s", out.count, t0.elapsed().as_secs_f64());
+    if out.sweep.len() > 1 {
+        let mut prev = None;
+        for &(w, count) in &out.sweep {
+            if prev != Some(count) {
+                eprintln!("  from {w} mm: {count} per sheet");
+                prev = Some(count);
+            }
+        }
+        if let Some(w) = out.width {
+            eprintln!("best: {w} mm");
+        }
+    }
 
     println!("outputs:");
     write(&format!("{base}_content.svg"), out.content_svg.as_bytes())?;

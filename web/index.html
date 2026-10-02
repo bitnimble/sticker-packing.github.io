@@ -40,13 +40,36 @@
   .filecard .clear:hover { border-color: var(--err); color: var(--err); }
   .params { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
   label { display: block; }
-  label .lab { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  label .lab, .field .lab { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
   input[type=number], select {
     width: 100%; background: #0e1319; color: var(--ink); border: 1px solid var(--line);
     border-radius: 8px; padding: 8px 10px; font: inherit;
   }
   input:focus, select:focus { outline: none; border-color: var(--accent); }
   input[type=range] { width: 100%; accent-color: var(--accent); padding: 0; }
+  .dual { position: relative; height: 36px; }
+  .dual .track, .dual .fill { position: absolute; top: 16px; height: 4px; border-radius: 2px; }
+  .dual .track { left: 0; right: 0; background: #0e1319; border: 1px solid var(--line); top: 15px; }
+  .dual .fill { background: var(--accent); }
+  /* stacked inputs: only the thumbs take pointer events, so both stay draggable */
+  .dual input[type=range] {
+    position: absolute; left: 0; top: 0; height: 36px; margin: 0;
+    -webkit-appearance: none; appearance: none; background: none; pointer-events: none;
+  }
+  .dual input[type=range]::-webkit-slider-runnable-track { background: none; height: 36px; }
+  .dual input[type=range]::-moz-range-track { background: none; }
+  .dual input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; pointer-events: auto; cursor: pointer; margin-top: 10px;
+    width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel);
+  }
+  .dual input[type=range]::-moz-range-thumb {
+    pointer-events: auto; cursor: pointer;
+    width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel);
+  }
+  .dual input[type=range]:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--ink); }
+  .dual input[type=range]:focus-visible::-moz-range-thumb { outline: 2px solid var(--ink); }
+  .sweep { margin-bottom: 14px; font-size: 13px; color: var(--muted); }
+  .sweep b { color: var(--ink); font-weight: 600; }
   .row { display: flex; align-items: center; gap: 8px; }
   .row input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
   details.advanced { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 14px; }
@@ -120,8 +143,8 @@
 
       <div id="autoOpts" style="display:none">
         <label style="margin-bottom:12px"><div class="lab">Margin (mm)</div><input type="number" id="autoMargin" value="2" step="0.5" min="0"></label>
-        <label style="margin-bottom:12px"><div class="lab">Simplification</div><input type="range" id="autoSimplify" value="0" min="0" max="100" step="1"></label>
-        <label style="margin-bottom:12px"><div class="lab">Roundness</div><input type="range" id="autoRound" value="0" min="0" max="100" step="1"></label>
+        <label style="margin-bottom:12px"><div class="lab">Simplification</div><input type="range" id="autoSimplify" value="12" min="0" max="100" step="1"></label>
+        <label style="margin-bottom:12px"><div class="lab">Roundness</div><input type="range" id="autoRound" value="100" min="0" max="100" step="1"></label>
         <div class="lab">Corner style</div>
         <div class="stylerow">
           <div class="styleopts" id="styleOpts">
@@ -166,7 +189,13 @@
           <option value="custom">Custom…</option>
         </select>
       </label>
-      <label><div class="lab">Sticker width (mm, blank = SVG units)</div><input type="number" id="width" step="1" value="70" placeholder="e.g. 46"></label>
+      <div class="field"><div class="lab">Sticker width incl. outline margin: <span id="widthReadout"></span></div>
+        <div class="dual">
+          <div class="track"></div><div class="fill" id="widthFill"></div>
+          <input type="range" id="widthMin" min="10" max="200" step="1" value="50" aria-label="Minimum sticker width (mm)">
+          <input type="range" id="widthMax" min="10" max="200" step="1" value="70" aria-label="Maximum sticker width (mm)">
+        </div>
+      </div>
       <label><div class="lab">Spacing between stickers (mm)</div><input type="number" id="spacing" value="1.5" step="0.1"></label>
       <label><div class="lab">Page margin / bleed (mm)</div><input type="number" id="margin" value="5" step="0.5"></label>
     </div>
@@ -184,7 +213,7 @@
         <label><div class="lab">Mark length (in)</div><input type="number" id="regLength" value="0.4" step="0.001" min="0"></label>
         <label><div class="lab">Inset (in)</div><input type="number" id="regInset" value="0.4" step="0.001" min="0"></label>
       </div>
-      <label class="row" style="margin-top:12px"><input type="checkbox" id="regDraw"> <span>Include registration marks in content output <span style="color:var(--muted)">(Cameo marks baked onto the content sheet)</span></span></label>
+      <label class="row" style="margin-top:12px"><input type="checkbox" id="regDraw" checked> <span>Include Cameo registration marks in content output</span></label>
     </div>
 
     <details class="advanced">
@@ -222,6 +251,7 @@
   </div>
 
   <div class="results" id="results">
+    <div class="sweep" id="sweep"></div>
     <div class="sheets">
       <div class="sheet">
         <h3>Content sheet<span style="color:var(--muted);font-weight:400">, print this</span></h3>
