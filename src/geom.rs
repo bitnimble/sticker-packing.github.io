@@ -5,6 +5,7 @@ use geo::{
 use geo_types::{coord, Coord};
 use i_overlay::core::fill_rule::FillRule;
 use i_overlay::float::simplify::SimplifyShape;
+use std::collections::HashMap;
 use std::f64::consts::PI;
 
 pub type Poly = Polygon<f64>;
@@ -136,33 +137,47 @@ pub fn convex_pieces(poly: &Poly) -> Vec<Piece> {
         Err(_) => return vec![],
     };
     let verts: Vec<Coord<f64>> = (0..data.len() / 2).map(|k| coord! {x: data[2 * k], y: data[2 * k + 1]}).collect();
-    let mut faces: Vec<Vec<usize>> = idx
+    let mut faces: Vec<Option<Vec<usize>>> = idx
         .chunks_exact(3)
         .map(|t| {
             let mut f = t.to_vec();
             if face_signed_area(&verts, &f) < 0.0 {
                 f.reverse();
             }
-            f
+            Some(f)
         })
         .collect();
-    loop {
-        let mut did_merge = false;
-        'outer: for i in 0..faces.len() {
-            for j in (i + 1)..faces.len() {
-                if let Some(m) = try_merge(&verts, &faces[i], &faces[j]) {
-                    faces[i] = m;
-                    faces.remove(j);
-                    did_merge = true;
-                    break 'outer;
-                }
-            }
-        }
-        if !did_merge {
-            break;
+    let mut edge_face: HashMap<(usize, usize), usize> = HashMap::new();
+    for (i, f) in faces.iter().enumerate() {
+        set_edge_owner(&mut edge_face, f.as_ref().unwrap(), i);
+    }
+    for i in 0..faces.len() {
+        while let Some((j, merged)) = find_merge(&verts, &faces, &edge_face, i) {
+            faces[j] = None;
+            set_edge_owner(&mut edge_face, &merged, i);
+            faces[i] = Some(merged);
         }
     }
-    faces.into_iter().map(|f| f.into_iter().map(|k| verts[k]).collect()).collect()
+    faces.into_iter().flatten().map(|f| f.into_iter().map(|k| verts[k]).collect()).collect()
+}
+
+fn set_edge_owner(edge_face: &mut HashMap<(usize, usize), usize>, face: &[usize], owner: usize) {
+    for k in 0..face.len() {
+        edge_face.insert((face[k], face[(k + 1) % face.len()]), owner);
+    }
+}
+
+fn find_merge(
+    verts: &[Coord<f64>], faces: &[Option<Vec<usize>>], edge_face: &HashMap<(usize, usize), usize>, i: usize,
+) -> Option<(usize, Vec<usize>)> {
+    let fi = faces[i].as_ref()?;
+    (0..fi.len()).find_map(|k| {
+        let j = *edge_face.get(&(fi[(k + 1) % fi.len()], fi[k]))?;
+        if j == i {
+            return None;
+        }
+        Some((j, try_merge(verts, fi, faces[j].as_ref()?)?))
+    })
 }
 
 pub fn neg_pieces(pieces: &[Piece]) -> Vec<Piece> {
@@ -261,16 +276,31 @@ fn line_intersect(p1: [f64; 2], d1: (f64, f64), p2: [f64; 2], d2: (f64, f64)) ->
     Some([p1[0] + t * d1.0, p1[1] + t * d1.1])
 }
 
-/// Outer contour of each shape only -- a cut outline is solid, so holes (gaps enclosed where two
-/// offsets merge, letter counters, etc.) are not cut.
-fn shapes_to_polys(shapes: Vec<Vec<Vec<[f64; 2]>>>) -> Vec<Poly> {
-    shapes
-        .into_iter()
-        .filter_map(|shape| {
-            let outer = shape.into_iter().next()?;
-            Some(Polygon::new(LineString::new(outer.into_iter().map(|p| coord! {x: p[0], y: p[1]}).collect()), vec![]))
-        })
-        .collect()
+/// Union of CCW contours, outer contours only -- a cut outline is solid, so holes are not cut.
+fn solid_union(contours: Vec<Vec<[f64; 2]>>) -> Multi {
+    // second pass absorbs islands that sat inside holes the first pass dropped
+    let outers = union_outers(solid_union_kd(contours, 0));
+    MultiPolygon::new(
+        outers.into_iter().map(|c| Polygon::new(LineString::new(c.into_iter().map(|p| coord! {x: p[0], y: p[1]}).collect()), vec![])).collect(),
+    )
+}
+
+fn solid_union_kd(mut contours: Vec<Vec<[f64; 2]>>, axis: usize) -> Vec<Vec<[f64; 2]>> {
+    const LEAF: usize = 32;
+    // one flat union of heavily overlapping primitives is superlinear in their crossings
+    if contours.len() > LEAF {
+        let key = |c: &Vec<[f64; 2]>| c.iter().map(|p| p[axis]).sum::<f64>() / c.len() as f64;
+        let mid = contours.len() / 2;
+        contours.select_nth_unstable_by(mid, |a, b| key(a).total_cmp(&key(b)));
+        let right = contours.split_off(mid);
+        contours = solid_union_kd(contours, 1 - axis);
+        contours.extend(solid_union_kd(right, 1 - axis));
+    }
+    union_outers(contours)
+}
+
+fn union_outers(contours: Vec<Vec<[f64; 2]>>) -> Vec<Vec<[f64; 2]>> {
+    contours.simplify_shape(FillRule::NonZero, 0.0).into_iter().filter_map(|s| s.into_iter().next()).map(ccw).collect()
 }
 
 fn poly_area2(c: &[[f64; 2]]) -> f64 {
@@ -385,10 +415,7 @@ pub fn offset_outline_multi(input: &[Vec<[f64; 2]>], m: f64, round_radius: f64, 
             }
         }
     }
-    if hulls.is_empty() {
-        return MultiPolygon::new(vec![]);
-    }
-    MultiPolygon::new(shapes_to_polys(hulls.simplify_shape(FillRule::NonZero, 0.0)))
+    solid_union(hulls)
 }
 
 /// SharpAll: mitred outward offset as a union of primitives (shape + an outward quad per edge + a
@@ -436,10 +463,7 @@ fn offset_miter(input: &[Vec<[f64; 2]>], m: f64) -> Multi {
             }
         }
     }
-    if contours.is_empty() {
-        return MultiPolygon::new(vec![]);
-    }
-    MultiPolygon::new(shapes_to_polys(contours.simplify_shape(FillRule::NonZero, 0.0)))
+    solid_union(contours)
 }
 
 // --- queries --------------------------------------------------------------
@@ -587,6 +611,54 @@ mod tests {
         let pt = Point::new(p[0], p[1]);
         let d = outline.0.iter().map(|poly| Euclidean::distance(&pt, poly.exterior())).fold(f64::MAX, f64::min);
         if outline.contains(&pt) { d } else { -d }
+    }
+
+    #[test]
+    fn convex_pieces_tile_a_wiggly_polygon() {
+        let n = 2000;
+        let ring: Vec<(f64, f64)> = (0..n)
+            .map(|i| {
+                let a = 2.0 * PI * i as f64 / n as f64;
+                let r = 300.0 + 40.0 * (7.0 * a).sin() + 15.0 * (131.0 * a).sin();
+                (r * a.cos(), r * a.sin())
+            })
+            .collect();
+        let solid = poly_from(&ring);
+        let hole = LineString::from(vec![(-50.0, -50.0), (-50.0, 50.0), (50.0, 50.0), (50.0, -50.0)]);
+        let holed = Polygon::new(solid.exterior().clone(), vec![hole]);
+        for poly in [solid, holed] {
+            let pieces = convex_pieces(&poly);
+            assert!(pieces.len() < n / 2, "{} pieces barely merged", pieces.len());
+            let mut total = 0.0;
+            for p in &pieces {
+                let piece = Polygon::new(LineString::new(p.clone()), vec![]);
+                assert!(piece.signed_area() > 0.0, "piece not CCW");
+                assert!(MultiPoint::new(p.iter().map(|&c| Point::from(c)).collect()).convex_hull().unsigned_area() - piece.unsigned_area() < 1e-6);
+                total += piece.unsigned_area();
+            }
+            assert!((total - poly.unsigned_area()).abs() < 1e-6 * total);
+        }
+    }
+
+    #[test]
+    fn solid_union_fills_holes_and_absorbs_islands() {
+        let square = |x: f64, y: f64, s: f64| ccw(vec![[x, y], [x + s, y], [x + s, y + s], [x, y + s]]);
+        // ring of overlapping squares around a hole, plus an island inside it; one flat leaf and a k-d split
+        for (count, size) in [(24, 40.0), (200, 20.0)] {
+            let mut contours: Vec<Vec<[f64; 2]>> = (0..count)
+                .map(|i| {
+                    let a = 2.0 * PI * i as f64 / count as f64;
+                    square(100.0 * a.cos() - size / 2.0, 100.0 * a.sin() - size / 2.0, size)
+                })
+                .collect();
+            contours.push(square(-5.0, -5.0, 10.0));
+            let union = solid_union(contours.clone());
+            assert_eq!(union.0.len(), 1, "{count} squares");
+            let flat_outer = union_outers(contours);
+            assert_eq!(flat_outer.len(), 2, "flat union keeps the island");
+            let ring_outer = flat_outer.iter().map(|c| poly_area2(c)).fold(0.0, f64::max) / 2.0;
+            assert!((union.unsigned_area() - ring_outer).abs() < 1e-6 * ring_outer);
+        }
     }
 
     #[test]
