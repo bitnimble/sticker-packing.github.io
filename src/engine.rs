@@ -597,14 +597,22 @@ mod tests {
             let inset = 5.0 + i as f64 * 0.0123457;
             let len = 10.4742 + inset / 7.0;
             let marks = output::registration_marks(203.123457, 291.987654, len, 0.44, inset, inset * 1.3, inset * 0.9, inset * 1.1);
-            let stroked = marks.split("<rect").find(|r| r.contains("stroke=")).unwrap();
-            assert!((attr(stroked, "width") + attr(stroked, "stroke-width") - 5.0).abs() < 1e-9);
-            for path in marks.split("<path d=\"M").skip(1) {
-                let d = &path[..path.find('"').unwrap()];
-                let p: Vec<f64> = d.split([',', 'L', ' ']).filter(|t| !t.is_empty()).map(|t| t.parse().unwrap()).collect();
-                let (h, v) = ((p[2] - p[0]).abs(), (p[5] - p[3]).abs());
-                assert!((h - v).abs() < 1e-9, "inset {inset}: arms {h} vs {v}");
-            }
+            let square = &marks[..marks.find("/>").unwrap()];
+            assert!(square.starts_with("<rect") && square.contains("fill=\"#000000\"") && square.contains("stroke="));
+            assert!((attr(square, "width") + attr(square, "stroke-width") - 5.0).abs() < 1e-9);
+            let corners: Vec<[f64; 2]> = marks
+                .split("<path d=\"M")
+                .skip(1)
+                .map(|path| {
+                    let d = &path[..path.find('"').unwrap()];
+                    let p: Vec<f64> = d.split([',', 'L', ' ']).filter(|t| !t.is_empty()).map(|t| t.parse().unwrap()).collect();
+                    let (h, v) = ((p[2] - p[0]).abs(), (p[5] - p[3]).abs());
+                    assert!((h - v).abs() < 1e-9, "inset {inset}: arms {h} vs {v}");
+                    [p[2], p[3]]
+                })
+                .collect();
+            let [tr, bl] = [corners[0], corners[1]];
+            assert_eq!((attr(square, "x"), attr(square, "y")), (bl[0], tr[1]), "inset {inset}: square off the brackets' lines");
         }
     }
 
