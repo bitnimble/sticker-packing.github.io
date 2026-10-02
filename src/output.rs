@@ -15,11 +15,19 @@ fn header(pw: f64, ph: f64) -> String {
 /// `len` long and `thick` wide (butt caps + miter join put the outer corner at inset - thick/2);
 /// the square is a fixed 5 mm expanded by the mark thickness (verified from a Silhouette PDF).
 pub fn registration_marks(pw: f64, ph: f64, len: f64, thick: f64, il: f64, it: f64, ir: f64, ib: f64) -> String {
+    // plottie needs both bracket arms equal to 1e-6; rounding each endpoint separately breaks that
+    let [pw, ph, len, thick, il, it, ir, ib] = [pw, ph, len, thick, il, it, ir, ib].map(|v| (v * 1e4).round() / 1e4);
     let sq = 5.0 + thick;
     let square = format!(
         "<rect x=\"{:.4}\" y=\"{:.4}\" width=\"{sq:.4}\" height=\"{sq:.4}\" fill=\"#000000\"/>",
         il - thick / 2.0,
         it - thick / 2.0
+    );
+    // plottie sees only stroked marks and needs the box exactly 5 mm outer; hidden under the fill
+    let detectable_square = format!(
+        "<rect x=\"{il:.4}\" y=\"{it:.4}\" width=\"{s:.4}\" height=\"{s:.4}\" fill=\"none\" \
+         stroke=\"#000000\" stroke-width=\"{thick:.4}\"/>",
+        s = 5.0 - thick
     );
     let bracket = | hx: f64, hy: f64, cx: f64, cy: f64, vx: f64, vy: f64| {
         format!(
@@ -31,7 +39,7 @@ pub fn registration_marks(pw: f64, ph: f64, len: f64, thick: f64, il: f64, it: f
     let tr = bracket(pw - ir - len, it, pw - ir, it, pw - ir, it + len);
     // bottom-left: corner (il, ph-ib), arms toward the interior (right, up)
     let bl = bracket(il + len, ph - ib, il, ph - ib, il, ph - ib - len);
-    format!("{square}{tr}{bl}")
+    format!("{square}{detectable_square}{tr}{bl}")
 }
 
 /// SVG `matrix(a b c d e f)` string from our (a,b,c,d,e,f) with x'=a*x+b*y+c: SVG orders it

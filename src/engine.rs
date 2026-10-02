@@ -404,6 +404,14 @@ pub fn run_pack(
     p: &Params,
     progress: &dyn Fn(&str, f64),
 ) -> Result<Outputs, String> {
+    if p.reg_marks && (p.reg_draw || p.reg_draw_outline) {
+        if p.reg_thickness_in <= 0.0 || p.reg_thickness_in * IN >= 5.0 {
+            return Err("registration mark thickness must be positive and under 5 mm".into());
+        }
+        if p.reg_length_in <= 0.0 {
+            return Err("registration mark length must be positive".into());
+        }
+    }
     progress("Preparing", 0.05);
     let ParsedBorder { outline, art_vb: vb } = ParsedBorder::parse(border_svg)?;
     let sheet = Sheet::new(p);
@@ -449,8 +457,13 @@ pub fn run_pack(
         pw, ph, p.reg_length_in * IN, p.reg_thickness_in * IN,
         p.reg_inset_l_in * IN, p.reg_inset_t_in * IN, p.reg_inset_r_in * IN, p.reg_inset_b_in * IN,
     );
-    let with_marks = |svg: String, draw: bool| {
-        if p.reg_marks && draw { svg.replace("</svg>", &format!("{marks}</svg>")) } else { svg }
+    let with_marks = |mut svg: String, draw: bool| {
+        if p.reg_marks && draw {
+            if let Some(close) = svg.rfind("</svg>") {
+                svg.insert_str(close, &marks);
+            }
+        }
+        svg
     };
 
     progress("Content sheet", 0.82);
@@ -460,12 +473,14 @@ pub fn run_pack(
     // Cut file from the ORIGINAL border geometry (curves preserved), not the flattened packing
     // polygon; fall back to the polygon if the SVG has no extractable path.
     let segs = svgio::outline_path_segs(border_svg, &norm_mat).unwrap_or_else(|_| output::poly_segs(&norm));
-    let outline_svg = with_marks(output::outline_svg(&segs, &placements, pw, ph, p.stroke), p.reg_draw_outline);
+    // plottie's svgoutline truncates the page to whole px at 5 px/mm; any other size scales y alone,
+    // skewing the bracket arms so plottie can't detect the marks
+    let (opw, oph) = if p.reg_marks && p.reg_draw_outline { (pw.ceil(), ph.ceil()) } else { (pw, ph) };
+    let outline_svg = with_marks(output::outline_svg(&segs, &placements, opw, oph, p.stroke), p.reg_draw_outline);
     let (content_pdf, outline_pdf) = if p.want_pdf {
         progress("Rendering PDF", 0.9);
         if p.pdf_background {
-            let bg = |svg: &str| output::add_background(svg, pw, ph);
-            (pdf_of(&bg(&content_svg))?, pdf_of(&bg(&outline_svg))?)
+            (pdf_of(&output::add_background(&content_svg, pw, ph))?, pdf_of(&output::add_background(&outline_svg, opw, oph))?)
         } else {
             (pdf_of(&content_svg)?, pdf_of(&outline_svg)?)
         }
@@ -569,6 +584,49 @@ mod tests {
         assert_eq!(run(true, false), (true, false));
         assert_eq!(run(false, true), (false, true));
         assert_eq!(run(true, true), (true, true));
+    }
+
+    #[test]
+    fn marks_meet_plottie_detection_rules() {
+        let attr = |tag: &str, name: &str| -> f64 {
+            let v = &tag[tag.find(&format!(" {name}=\"")).unwrap() + name.len() + 3..];
+            v[..v.find('"').unwrap()].parse().unwrap()
+        };
+        // Insets with more than 4 decimals, so endpoints round independently.
+        for i in 0..20 {
+            let inset = 5.0 + i as f64 * 0.0123457;
+            let len = 10.4742 + inset / 7.0;
+            let marks = output::registration_marks(203.123457, 291.987654, len, 0.44, inset, inset * 1.3, inset * 0.9, inset * 1.1);
+            let stroked = marks.split("<rect").find(|r| r.contains("stroke=")).unwrap();
+            assert!((attr(stroked, "width") + attr(stroked, "stroke-width") - 5.0).abs() < 1e-9);
+            for path in marks.split("<path d=\"M").skip(1) {
+                let d = &path[..path.find('"').unwrap()];
+                let p: Vec<f64> = d.split([',', 'L', ' ']).filter(|t| !t.is_empty()).map(|t| t.parse().unwrap()).collect();
+                let (h, v) = ((p[2] - p[0]).abs(), (p[5] - p[3]).abs());
+                assert!((h - v).abs() < 1e-9, "inset {inset}: arms {h} vs {v}");
+            }
+        }
+    }
+
+    #[test]
+    fn outline_sheet_with_marks_rounds_page_up_to_whole_mm() {
+        let border = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><path d=\"M0,0 L10,0 L10,10 L0,10 Z\"/></svg>";
+        let p = Params {
+            sticker_width: Some((30.0, 30.0)),
+            page_w: 215.9,
+            page_h: 279.4,
+            want_pdf: false,
+            reg_marks: true,
+            reg_draw: true,
+            reg_draw_outline: true,
+            ..Default::default()
+        };
+        let out = run_pack(border, border.as_bytes(), "svg", &p, &|_, _| {}).unwrap();
+        assert!(out.outline_svg.contains("width=\"216mm\" height=\"280mm\""));
+        assert!(out.content_svg.contains("width=\"215.9mm\" height=\"279.4mm\""));
+
+        let thin = Params { reg_thickness_in: 0.0, ..p };
+        assert!(run_pack(border, border.as_bytes(), "svg", &thin, &|_, _| {}).is_err());
     }
 
     #[test]
