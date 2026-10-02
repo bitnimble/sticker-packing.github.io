@@ -397,6 +397,7 @@ $('run').addEventListener('click', async () => {
       pdfBackground: $<HTMLInputElement>('pdfBg').checked,
       regMarks: $<HTMLInputElement>('regMarks').checked,
       regDraw: $<HTMLInputElement>('regDraw').checked,
+      regDrawOutline: $<HTMLInputElement>('regDrawOutline').checked,
       regLengthIn: num('regLength', 0.4),
       regThicknessIn: num('regThickness', 0.02),
       // per-side fields (advanced) are blank by default and inherit the single Inset value

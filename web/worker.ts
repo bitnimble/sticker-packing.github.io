@@ -14,7 +14,7 @@ const options = (a: PackArgs): PackOptions => new PackOptions(
   a.widthMin, a.widthMax, a.pageW, a.pageH,
   a.margin, a.spacing, a.method, a.rotations, a.maxCount, a.simplify,
   a.attempts, a.stroke, a.wantPdf, a.pdfBackground,
-  a.regMarks, a.regDraw, a.regLengthIn, a.regThicknessIn,
+  a.regMarks, a.regDraw, a.regDrawOutline, a.regLengthIn, a.regThicknessIn,
   a.regInsetLIn, a.regInsetTIn, a.regInsetRIn, a.regInsetBIn,
 );
 

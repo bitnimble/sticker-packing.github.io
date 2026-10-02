@@ -24,6 +24,8 @@ pub struct Params {
     pub reg_marks: bool,
     /// Also draw the Cameo marks into the content sheet.
     pub reg_draw: bool,
+    /// Also draw the Cameo marks into the outline (cut) sheet.
+    pub reg_draw_outline: bool,
     pub reg_length_in: f64,
     pub reg_thickness_in: f64,
     pub reg_inset_l_in: f64,
@@ -51,6 +53,7 @@ impl Default for Params {
             pdf_background: true,
             reg_marks: false,
             reg_draw: false,
+            reg_draw_outline: false,
             reg_length_in: 0.4,
             reg_thickness_in: 0.02,
             reg_inset_l_in: 0.4,
@@ -441,21 +444,23 @@ pub fn run_pack(
     };
     let Layout { norm, norm_mat, placements } = layout;
 
+    const IN: f64 = 25.4;
+    let marks = output::registration_marks(
+        pw, ph, p.reg_length_in * IN, p.reg_thickness_in * IN,
+        p.reg_inset_l_in * IN, p.reg_inset_t_in * IN, p.reg_inset_r_in * IN, p.reg_inset_b_in * IN,
+    );
+    let with_marks = |svg: String, draw: bool| {
+        if p.reg_marks && draw { svg.replace("</svg>", &format!("{marks}</svg>")) } else { svg }
+    };
+
     progress("Content sheet", 0.82);
-    let mut content_svg = build_content_svg(border_svg, image_bytes, image_ext, &outline, &vb, &norm_mat, &placements, pw, ph)?;
-    if p.reg_marks && p.reg_draw {
-        const IN: f64 = 25.4;
-        let marks = output::registration_marks(
-            pw, ph, p.reg_length_in * IN, p.reg_thickness_in * IN,
-            p.reg_inset_l_in * IN, p.reg_inset_t_in * IN, p.reg_inset_r_in * IN, p.reg_inset_b_in * IN,
-        );
-        content_svg = content_svg.replace("</svg>", &format!("{marks}</svg>"));
-    }
+    let content_svg = build_content_svg(border_svg, image_bytes, image_ext, &outline, &vb, &norm_mat, &placements, pw, ph)?;
+    let content_svg = with_marks(content_svg, p.reg_draw);
     progress("Outline sheet", 0.86);
     // Cut file from the ORIGINAL border geometry (curves preserved), not the flattened packing
     // polygon; fall back to the polygon if the SVG has no extractable path.
     let segs = svgio::outline_path_segs(border_svg, &norm_mat).unwrap_or_else(|_| output::poly_segs(&norm));
-    let outline_svg = output::outline_svg(&segs, &placements, pw, ph, p.stroke);
+    let outline_svg = with_marks(output::outline_svg(&segs, &placements, pw, ph, p.stroke), p.reg_draw_outline);
     let (content_pdf, outline_pdf) = if p.want_pdf {
         progress("Rendering PDF", 0.9);
         if p.pdf_background {
@@ -542,6 +547,28 @@ mod tests {
         assert!(reserve_symmetric(&plain));
         let marks = build_reserve(&Params { reg_marks: true, ..Default::default() }, 210.0, 297.0);
         assert!(!reserve_symmetric(&marks));
+    }
+
+    #[test]
+    fn marks_drawn_only_into_selected_sheets() {
+        let border = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><path d=\"M0,0 L10,0 L10,10 L0,10 Z\"/></svg>";
+        let marks = output::registration_marks(210.0, 297.0, 0.4 * 25.4, 0.02 * 25.4, 0.4 * 25.4, 0.4 * 25.4, 0.4 * 25.4, 0.4 * 25.4);
+        let run = |reg_draw, reg_draw_outline| {
+            let p = Params {
+                sticker_width: Some((30.0, 30.0)),
+                want_pdf: false,
+                reg_marks: true,
+                reg_draw,
+                reg_draw_outline,
+                ..Default::default()
+            };
+            let out = run_pack(border, border.as_bytes(), "svg", &p, &|_, _| {}).unwrap();
+            (out.content_svg.contains(&marks), out.outline_svg.contains(&marks))
+        };
+        assert_eq!(run(false, false), (false, false));
+        assert_eq!(run(true, false), (true, false));
+        assert_eq!(run(false, true), (false, true));
+        assert_eq!(run(true, true), (true, true));
     }
 
     #[test]

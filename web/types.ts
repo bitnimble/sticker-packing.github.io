@@ -20,6 +20,7 @@ export interface PackArgs {
   pdfBackground: boolean;
   regMarks: boolean;
   regDraw: boolean;
+  regDrawOutline: boolean;
   regLengthIn: number;
   regThicknessIn: number;
   regInsetLIn: number;
