@@ -1,5 +1,5 @@
 use clap::Parser;
-use sticker_packer::engine::{run_pack, Border, Params};
+use sticker_packer::engine::{run_pack, Params};
 use std::time::Instant;
 
 #[derive(Parser)]
@@ -108,7 +108,7 @@ fn run(args: Args) -> Result<(), String> {
     };
 
     let t0 = Instant::now();
-    let out = run_pack(Border::Svg(&border_svg), &image_bytes, &image_ext, &params, &|stage, _| eprintln!("  {stage}..."))?;
+    let out = run_pack(&border_svg, &image_bytes, &image_ext, &params, &|stage, _| eprintln!("  {stage}..."))?;
     eprintln!("packed {} in {:.2}s", out.count, t0.elapsed().as_secs_f64());
     if out.sweep.len() > 1 {
         let mut prev = None;

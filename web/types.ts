@@ -1,18 +1,7 @@
 // Shared types for the main-thread app and the packing worker.
 
-export interface AutoOutlineArgs {
-  points: Float64Array;
-  lengths: Uint32Array;
-  vb: [number, number, number, number];
-  marginMm: number;
-  roundRadius: number;
-  style: string;
-  stroke: number;
-}
-
 export interface PackArgs {
   border: string;
-  auto: AutoOutlineArgs | null; // replaces `border`, regenerated per swept width
   imageBytes: Uint8Array;
   imageExt: string;
   widthMin: number;

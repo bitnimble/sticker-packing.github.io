@@ -1,7 +1,7 @@
-import init, { preview, AutoOutline } from './sticker_packer.js';
+import init, { preview, auto_outline } from './sticker_packer.js';
 import { traceBase, traceFinish, type Traced, type BaseRaster } from './trace.js';
 import { PackerPool } from './pool.js';
-import { errorMessage, type AutoOutlineArgs, type PackArgs } from './types.js';
+import { errorMessage, type PackArgs } from './types.js';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 const setStatus = (msg: string, cls = ''): void => {
@@ -146,7 +146,9 @@ wireDrop('imageDrop', 'imageFile', 'imageCard', async (file) => {
   const mime = ext === 'svg' ? 'image/svg+xml' : file.type || 'application/octet-stream';
   const url = URL.createObjectURL(new Blob([buf], { type: mime }));
   image = { bytes: buf, ext, url, name: file.name.replace(/\.[^.]*$/, '') };
+  traced = null;
   base = null;
+  previewCache.clear();
   showCard('image', url, file.name);
   await onArtChanged();
   if (old) URL.revokeObjectURL(old); // revoke only after the new art has rendered
@@ -165,43 +167,28 @@ $('imageClear').addEventListener('click', () => {
 // --- auto-outline (generate the border by dilating the art silhouette) ---
 const autoEnabled = (): boolean => $<HTMLInputElement>('autoOutline').checked;
 const currentStyle = (): string => (document.querySelector('input[name=autostyle]:checked') as HTMLInputElement | null)?.value ?? 'external';
-const previewCache = new Map<string, string>(); // "style:margin" -> outline SVG for the current art
+const previewCache = new Map<string, string>();
 
 function clearAutoBorder(): void {
   if (border && border !== manualBorder && border.url) URL.revokeObjectURL(border.url);
   border = null;
 }
 function genOutline(style: string): string {
-  const stickerW = widthRange()[1];
-  const key = style + ':' + num('autoMargin', 2) + ':' + stickerW + ':' + num('autoRound', 0);
+  if (!traced) throw new Error('no traced art');
+  const marginPct = num('autoMargin', 5);
+  const roundness = num('autoRound', 0);
+  const key = style + ':' + marginPct + ':' + roundness;
   const hit = previewCache.get(key);
   if (hit) return hit;
-  const a = autoOutlineArgs(style);
-  const outline = new AutoOutline(a.points, a.lengths, ...a.vb, a.marginMm, a.roundRadius, a.style, a.stroke);
-  try {
-    const svg = outline.svg(stickerW);
-    previewCache.set(key, svg);
-    return svg;
-  } finally {
-    outline.free();
-  }
-}
-function autoOutlineArgs(style: string): AutoOutlineArgs {
-  if (!traced) throw new Error('no traced art');
   // Roundness (0-100): extra convex-corner rounding, as a fraction of the shape size.
-  const roundRadius = (num('autoRound', 0) / 100) * 0.12 * Math.min(traced.vb[2], traced.vb[3]);
+  const roundRadius = (roundness / 100) * 0.12 * Math.min(traced.vb[2], traced.vb[3]);
   const flat: number[] = [];
   const lengths: number[] = [];
   for (const c of traced.contours) { lengths.push(c.length / 2); for (const v of c) flat.push(v); }
-  return {
-    points: new Float64Array(flat),
-    lengths: new Uint32Array(lengths),
-    vb: traced.vb,
-    marginMm: num('autoMargin', 2),
-    roundRadius,
-    style,
-    stroke: Math.max(traced.vb[2], traced.vb[3]) / 150,
-  };
+  const stroke = Math.max(traced.vb[2], traced.vb[3]) / 150;
+  const svg = auto_outline(new Float64Array(flat), new Uint32Array(lengths), ...traced.vb, marginPct, roundRadius, style, stroke);
+  previewCache.set(key, svg);
+  return svg;
 }
 // Simplification (0-100) as a 0..1 amount: outward-only, amplitude-ordered smoothing of the
 // silhouette -- shallow wiggles smooth away first, prominent notches survive, outline only grows.
@@ -260,7 +247,7 @@ function debounce(fn: () => unknown, ms: number): () => void {
   let t: ReturnType<typeof setTimeout> | undefined;
   return () => { clearTimeout(t); t = setTimeout(fn, ms); };
 }
-$('autoMargin').addEventListener('input', () => { previewCache.clear(); regenAuto(); });
+$('autoMargin').addEventListener('input', regenAuto);
 function widthRange(): [number, number] {
   return [num('widthMin', 50), num('widthMax', 70)];
 }
@@ -277,13 +264,12 @@ function syncWidth(moved: HTMLInputElement): void {
   fill.style.left = `calc(8px + (100% - 16px) * ${pos(a)})`;
   fill.style.width = `calc((100% - 16px) * ${pos(b) - pos(a)})`;
 }
-const regenAutoDebounced = debounce(regenAuto, 150);
 for (const id of ['widthMin', 'widthMax']) {
   const el = $<HTMLInputElement>(id);
-  el.addEventListener('input', () => { syncWidth(el); regenAutoDebounced(); });
+  el.addEventListener('input', () => syncWidth(el));
 }
 syncWidth($<HTMLInputElement>('widthMax'));
-$('autoRound').addEventListener('input', debounce(() => { previewCache.clear(); regenAuto(); }, 150));
+$('autoRound').addEventListener('input', debounce(regenAuto, 150));
 $('autoSimplify').addEventListener('input', debounce(async () => { await traceCurrentArt(); regenAuto(); }, 150));
 document.querySelectorAll('input[name=autostyle]').forEach((r) => r.addEventListener('change', regenAuto));
 
@@ -392,7 +378,6 @@ $('run').addEventListener('click', async () => {
     const [widthMin, widthMax] = widthRange();
     const args: PackArgs = {
       border: border.text,
-      auto: autoEnabled() ? autoOutlineArgs(currentStyle()) : null,
       imageBytes: image.bytes,
       imageExt: image.ext,
       widthMin,
