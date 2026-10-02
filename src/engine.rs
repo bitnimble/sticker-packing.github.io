@@ -625,6 +625,14 @@ mod tests {
         assert!((-nums[0] / nums[2] - 0.05).abs() < 1e-6, "margin {} of width {}", -nums[0], nums[2]);
     }
 
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn foreign_namespace_art_renders_to_pdf() {
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:affinity=\"http://www.serif.com/\" viewBox=\"0 0 100 100\" width=\"100\" height=\"100\"><path affinity:id=\"a\" d=\"M0,0 L100,0 L100,100 L0,100 Z\"/></svg>";
+        let p = Params { want_pdf: true, ..Default::default() };
+        run_pack(svg, &[], "", &p, &|_, _| {}).unwrap();
+    }
+
     #[test]
     fn degenerate_outline_errors_not_panics() {
         // Collinear border (zero area) used to triangulate to nothing and panic in buffer()/largest().

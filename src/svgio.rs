@@ -220,13 +220,32 @@ fn seg_path(path: &usvg::Path, segs: &mut Vec<Seg>, scale: f64, vb: &[f64; 4], p
 
 /// The raw inner markup of an SVG (everything between the root `<svg ...>` and `</svg>`), in
 /// viewBox user-units. Inlined verbatim into an output group so all artwork fidelity
-/// (gradients, clips, rasters) is preserved.
+/// (gradients, clips, rasters) is preserved. Wrapped in a `<g>` redeclaring the root's prefixed
+/// namespaces when it has any, so the markup stays well-formed outside its original root.
 pub fn load_inner_svg_str(s: &str) -> Result<String, String> {
     let lower = s.to_ascii_lowercase();
     let start = lower.find("<svg").ok_or("no <svg>")?;
     let open_end = s[start..].find('>').map(|i| start + i + 1).ok_or("malformed <svg>")?;
     let close = lower.rfind("</svg>").ok_or("no </svg>")?;
-    Ok(s[open_end..close].trim().to_string())
+    let inner = s[open_end..close].trim();
+    let decls = prefixed_ns_decls(&s[start..open_end]);
+    Ok(if decls.is_empty() { inner.to_string() } else { format!("<g{decls}>{inner}</g>") })
+}
+
+/// Every `xmlns:prefix="uri"` declaration in an opening tag, each with a leading space.
+fn prefixed_ns_decls(tag: &str) -> String {
+    let mut out = String::new();
+    let mut rest = tag;
+    while let Some(i) = rest.find("xmlns:") {
+        let decl = &rest[i..];
+        let Some(eq) = decl.find('=') else { break };
+        let value = decl[eq + 1..].trim_start();
+        let Some(quote) = value.chars().next().filter(|c| *c == '"' || *c == '\'') else { break };
+        let Some(len) = value[1..].find(quote) else { break };
+        out.push_str(&format!(" {}={quote}{}{quote}", decl[..eq].trim_end(), &value[1..1 + len]));
+        rest = &value[len + 2..];
+    }
+    out
 }
 
 /// File-reading wrappers (native CLI).
